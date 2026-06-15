@@ -1,0 +1,251 @@
+{
+  "Settings": {
+    "General": {
+      "Name": "SampleAGENT_test",
+      "Description": "",
+      "InitiateUsing": {
+        "Type": "FORM",
+        "RepositoryId": 157,
+        "FormId": 86
+      },
+      "Coordinator": [],
+      "Superuser": [],
+      "SlaSettings": {
+        "WorkDays": [],
+        "WorkHours": {
+          "From": "",
+          "To": ""
+        },
+        "TimeZone": ""
+      },
+      "KanbanSettings": [],
+      "ScheduleReport": {
+        "Enabled": null,
+        "Schedule": null
+      },
+      "ProcessNumberPrefix": "[   {     \"id\":\"G08DxbbjAuYyzdJjhGJfJ\",\"key\":\"seperator\",\"value\":\"-\"},{\"id\":\"wj5J7_SbANVJ3v2HLwp-w\",\"key\":\"reset\",\"value\":\"year\"},{\"id\":\"R10LHwFSxPA2k9NszU7UZ\",\"key\":\"prefix\",\"value\":\"REQ\"},{\"id\":\"f7eVCuOn63Mf3wNGcmcKO\",\"key\":\"autoIncrement\",\"value\":1}]",
+      "SlaRules": [],
+      "Ocr": {
+        "Required": false,
+        "Credit": 0,
+        "CreditLimit": null
+      }
+    },
+    "Publish": {
+      "PublishOption": "PUBLISHED",
+      "PublishSchedule": "",
+      "UnpublishSchedule": ""
+    }
+  },
+  "Blocks": [
+    {
+      "Id": "bTS5MTod8pmv1L2pdt87z",
+      "Type": "START",
+      "Settings": {
+        "Label": "Start",
+        "InitiateMode": "MANUAL",
+        "InitiateBy": ["USER"],
+        "MasterFormId": null,
+        "Users": ["9483F673-416A-43C8-B293-83A72025AF58"],
+        "Groups": [],
+        "SlaRules": [],
+        "FileSettings": { "FileCheckList": [] },
+        "MailInitiate": null,
+        "SubWorkflowId": 0,
+        "OcrAgent": null,
+        "AiPrediction": { "PredictionFields": null },
+        "RuleConditions": null,
+        "Conditions": { "GroupLogic": "ALL", "Condition": [] },
+        "MlCompareMaster": false,
+        "MlMasterFormId": 0,
+        "MlCompareFields": [],
+        "MlPredictionField": ""
+      },
+      "Left": 56.5,
+      "Top": 60,
+      "Width": 175,
+      "Height": 90,
+      "Color": "#2BCCBA",
+      "Icon": "mdi-flag"
+    },
+    {
+      "Id": "nav4lUaYuUe-Z86psVzLD",
+      "Type": "END",
+      "Settings": {
+        "Label": "End",
+        "InitiateMode": "MANUAL",
+        "InitiateBy": ["USER"],
+        "MasterFormId": null,
+        "Users": [],
+        "Groups": [],
+        "SlaRules": null,
+        "FileSettings": null,
+        "MailInitiate": null,
+        "SubWorkflowId": null,
+        "OcrAgent": null,
+        "AiPrediction": null,
+        "RuleConditions": null,
+        "Conditions": null,
+        "MlCompareMaster": null,
+        "MlMasterFormId": null,
+        "MlCompareFields": null,
+        "MlPredictionField": null
+      },
+      "Left": 915,
+      "Top": 430,
+      "Width": 175,
+      "Height": 90,
+      "Color": "#FC5C65",
+      "Icon": "mdi-flag"
+    },
+    {
+      "Id": "H1P72eKgPE2FCTnJ9-TNX",
+      "Type": "AP_AGENT",
+      "Settings": {
+        "Label": "APAGENT1",
+        "InitiateMode": "MANUAL",
+        "InitiateBy": ["USER"],
+        "MasterFormId": null,
+        "Users": [],
+        "Groups": [],
+        "SlaRules": [],
+        "FileSettings": { "FileCheckList": [] },
+        "MailInitiate": null,
+        "SubWorkflowId": 0,
+        "OcrAgent": null,
+        "AiPrediction": { "PredictionFields": null },
+        "RuleConditions": null,
+        "Conditions": { "GroupLogic": "ALL", "Condition": [] },
+        "MlCompareMaster": false,
+        "MlMasterFormId": 0,
+        "MlCompareFields": [],
+        "MlPredictionField": ""
+      },
+      "Left": 278.5,
+      "Top": 101,
+      "Width": 175,
+      "Height": 90,
+      "Color": "#c37df3ff",
+      "Icon": "mdi-creation"
+    },
+    {
+      "Id": "0sni78IS5i4mauKZ2t8R1",
+      "Type": "INTERNAL_ACTOR",
+      "Settings": {
+        "Label": "Verifier",
+        "InitiateMode": "MANUAL",
+        "InitiateBy": ["USER"],
+        "MasterFormId": null,
+        "Users": ["9483F673-416A-43C8-B293-83A72025AF58"],
+        "Groups": [],
+        "SlaRules": [],
+        "FileSettings": { "FileCheckList": [] },
+        "MailInitiate": null,
+        "SubWorkflowId": 0,
+        "OcrAgent": null,
+        "AiPrediction": { "PredictionFields": null },
+        "RuleConditions": null,
+        "Conditions": { "GroupLogic": "ALL", "Condition": [] },
+        "MlCompareMaster": false,
+        "MlMasterFormId": 0,
+        "MlCompareFields": [],
+        "MlPredictionField": ""
+      },
+      "Left": 491,
+      "Top": 220,
+      "Width": 175,
+      "Height": 90,
+      "Color": "#A65EEA",
+      "Icon": "mdi-account-multiple"
+    },
+    {
+      "Id": "KefzlSRzlpdbtOmniXBYA",
+      "Type": "INTERNAL_ACTOR",
+      "Settings": {
+        "Label": "Approver",
+        "InitiateMode": "MANUAL",
+        "InitiateBy": ["USER"],
+        "MasterFormId": null,
+        "Users": ["9483F673-416A-43C8-B293-83A72025AF58"],
+        "Groups": [],
+        "SlaRules": [],
+        "FileSettings": { "FileCheckList": [] },
+        "MailInitiate": null,
+        "SubWorkflowId": 0,
+        "OcrAgent": null,
+        "AiPrediction": { "PredictionFields": null },
+        "RuleConditions": null,
+        "Conditions": { "GroupLogic": "ALL", "Condition": [] },
+        "MlCompareMaster": false,
+        "MlMasterFormId": 0,
+        "MlCompareFields": [],
+        "MlPredictionField": ""
+      },
+      "Left": 711,
+      "Top": 220,
+      "Width": 175,
+      "Height": 90,
+      "Color": "#A65EEA",
+      "Icon": "mdi-account-multiple"
+    }
+  ],
+  "Rules": [
+    {
+      "Id": "JcsLzKrrP52jg2teHzXU_",
+      "FromBlockId": "bTS5MTod8pmv1L2pdt87z",
+      "ToBlockId": "H1P72eKgPE2FCTnJ9-TNX",
+      "ProceedAction": "Submit",
+      "Left": 228.5,
+      "Top": 98.5
+    },
+    {
+      "Id": "syxeKAjW_y13vyrV2aHm1",
+      "FromBlockId": "H1P72eKgPE2FCTnJ9-TNX",
+      "ToBlockId": "0sni78IS5i4mauKZ2t8R1",
+      "ProceedAction": "APPROVED",
+      "Left": 448.5,
+      "Top": 160
+    },
+    {
+      "Id": "rOgX8VtTWRu_-hj62-GUz",
+      "FromBlockId": "H1P72eKgPE2FCTnJ9-TNX",
+      "ToBlockId": "0sni78IS5i4mauKZ2t8R1",
+      "ProceedAction": "REJECTED",
+      "Left": 448.5,
+      "Top": 175
+    },
+    {
+      "Id": "KaP85FiPodTnVju3Glv6r",
+      "FromBlockId": "H1P72eKgPE2FCTnJ9-TNX",
+      "ToBlockId": "0sni78IS5i4mauKZ2t8R1",
+      "ProceedAction": "PARTIALLYAPPROVED",
+      "Left": 448.5,
+      "Top": 190
+    },
+    {
+      "Id": "Fy1Ccd2yElHULEwr_yES2",
+      "FromBlockId": "0sni78IS5i4mauKZ2t8R1",
+      "ToBlockId": "KefzlSRzlpdbtOmniXBYA",
+      "ProceedAction": "Approved",
+      "Left": 665.5,
+      "Top": 220
+    },
+    {
+      "Id": "KqTmft6b-NTVWbvy18jjU",
+      "FromBlockId": "KefzlSRzlpdbtOmniXBYA",
+      "ToBlockId": "nav4lUaYuUe-Z86psVzLD",
+      "ProceedAction": "Approved",
+      "Left": 798,
+      "Top": 273
+    }
+  ],
+  "MlPredictions": [],
+  "HasSLASettings": 1,
+  "InitiateRights": null,
+  "InitiateUserDomain": [],
+  "ModifiedBlockIds": [],
+  "BlockStatus": 0,
+  "Ocr": null,
+  "WorkspaceId": null,
+  "MasterFormIds": []
+}

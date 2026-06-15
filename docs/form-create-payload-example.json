@@ -1,0 +1,40 @@
+{
+  "settings": {
+    "general": {
+      "name": "Test_Workflow_Form",
+      "description": "Sample form for Swagger Try it out",
+      "layout": "SINGLE",
+      "type": "ENTRY",
+      "superUser": ["9483F673-416A-43C8-B293-83A72025AF58"],
+      "entryUser": ["9483F673-416A-43C8-B293-83A72025AF58"]
+    },
+    "publish": {
+      "publishOption": "PUBLISHED"
+    }
+  },
+  "panels": [
+    {
+      "id": "main-panel",
+      "fields": [
+        {
+          "id": "req-title",
+          "label": "Request Title",
+          "type": "TEXT",
+          "settings": {
+            "validation": {
+              "fieldRule": "required"
+            }
+          }
+        },
+        {
+          "id": "req-amount",
+          "label": "Amount",
+          "type": "NUMBER",
+          "settings": {}
+        }
+      ]
+    }
+  ],
+  "secondaryPanels": [],
+  "isDeleted": false
+}

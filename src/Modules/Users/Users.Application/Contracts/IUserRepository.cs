@@ -1,0 +1,25 @@
+using SaaSApp.Users.Domain.Entities;
+
+namespace SaaSApp.Users.Application.Contracts;
+
+/// <summary>User persistence for the current tenant.</summary>
+public interface IUserRepository
+{
+    /// <summary>Add a new user.</summary>
+    Task AddAsync(User user, CancellationToken cancellationToken = default);
+
+    /// <summary>Get user by ID.</summary>
+    Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>Get user by email (case-sensitive, trimmed).</summary>
+    Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default);
+
+    /// <summary>List all users (excluding soft-deleted) ordered by DisplayName.</summary>
+    Task<IReadOnlyList<User>> ListAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Mark user as modified for persistence.</summary>
+    void Update(User user);
+
+    /// <summary>Soft-delete user.</summary>
+    void Delete(User user);
+}

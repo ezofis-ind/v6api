@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow Tables - Schema & Purpose | ezofisAPI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --ezofis-primary: #6366f1;
+            --ezofis-secondary: #8b5cf6;
+            --ezofis-accent: #ec4899;
+            --ezofis-dark: #1e293b;
+            --ezofis-light: #f8fafc;
+            --ezofis-border: #e2e8f0;
+            --ezofis-text: #334155;
+            --ezofis-success: #10b981;
+            --ezofis-warning: #f59e0b;
+        }
+        body { font-family: 'Segoe UI', -apple-system, sans-serif; line-height: 1.6; color: var(--ezofis-text); background: var(--ezofis-light); }
+        .header {
+            background: linear-gradient(135deg, var(--ezofis-primary) 0%, var(--ezofis-secondary) 50%, var(--ezofis-accent) 100%);
+            color: white; padding: 2rem; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .header h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
+        .header p { opacity: 0.95; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .section { background: white; margin-bottom: 2rem; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border: 1px solid var(--ezofis-border); }
+        .section h2 { color: var(--ezofis-primary); margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 2px solid var(--ezofis-primary); font-size: 1.5rem; }
+        .section h3 { color: var(--ezofis-secondary); margin-top: 1.5rem; margin-bottom: 0.75rem; font-size: 1.2rem; }
+        pre { background: #1e293b; color: #e2e8f0; padding: 1.25rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; font-size: 0.9rem; }
+        code { font-family: 'Consolas', 'Monaco', monospace; font-size: 0.9rem; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--ezofis-border); }
+        th { background: var(--ezofis-primary); color: white; font-weight: 600; font-size: 0.85rem; }
+        tr:hover { background: var(--ezofis-light); }
+        .info-box { background: linear-gradient(to right, #dbeafe, #eff6ff); border-left: 4px solid #3b82f6; padding: 1rem; margin: 1rem 0; border-radius: 8px; }
+        .success-box { background: linear-gradient(to right, #d1fae5, #ecfdf5); border-left: 4px solid var(--ezofis-success); padding: 1rem; margin: 1rem 0; border-radius: 8px; }
+        .plain-box { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 1rem; margin: 1rem 0; border-radius: 8px; font-size: 1.02rem; }
+        .plain-box strong { color: #92400e; }
+        .flow-diagram { background: #f8fafc; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.9rem; border: 2px solid var(--ezofis-border); margin: 1rem 0; }
+        .step-box { background: #f0fdf4; border: 2px solid var(--ezofis-success); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+        .step-box .step-num { display: inline-block; background: var(--ezofis-success); color: white; width: 1.8rem; height: 1.8rem; line-height: 1.8rem; text-align: center; border-radius: 50%; font-weight: bold; margin-right: 0.5rem; }
+        .step-box .creates { color: #059669; font-weight: 600; margin-top: 0.5rem; }
+        .step-box .affects { color: #0d9488; margin-top: 0.25rem; }
+        .doc-nav { background: rgba(0,0,0,0.15); padding: 0.5rem 1rem; margin: 0 0 1rem 0; font-size: 0.9rem; border-radius: 0 0 8px 8px; display: inline-block; }
+        .doc-nav a { color: rgba(255,255,255,0.95); margin-right: 1rem; text-decoration: none; }
+        .doc-nav a:hover { text-decoration: underline; }
+        footer { background: linear-gradient(135deg, var(--ezofis-dark) 0%, #334155 100%); color: white; text-align: center; padding: 1.5rem; margin-top: 2rem; }
+        footer a { color: #a5b4fc; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <nav class="doc-nav"><a href="index.html">API Docs</a> · <a href="dms-repo-tables.html">DMS Repository Tables</a></nav>
+        <h1>⚙️ Workflow Tables – Schema & Purpose</h1>
+        <p>Complete table design for workflow module. Base tables + dynamic per-workflow tables.</p>
+    </div>
+    <div class="container">
+
+        <div class="success-box">
+            <strong>📌 Quick Summary</strong><br>
+            • <strong>Base tables</strong> (Workflows, Steps, Lookup, Approvals, SLAs) = definitions and cross-workflow index. Created once.<br>
+            • <strong>Per-workflow tables</strong> (Instances, StepInstances, Comments, Attachments...) = runtime data. Created when you publish a workflow.<br>
+            • <strong>WorkflowInstanceLookup</strong> = central index. Tells us "which workflow is this item in?" for Inbox / Sent / Completed.
+        </div>
+
+        <div class="section">
+            <h2>Step-by-Step: What Happens When</h2>
+            <p>Each action creates or affects specific tables. Follow the flow below.</p>
+
+            <div class="step-box">
+                <span class="step-num">1</span> <strong>POST /api/workflows/setup-schema</strong> (run once per tenant, or during signup)<br>
+                <span class="creates">Creates:</span> workflow.Workflows, workflow.WorkflowSteps, workflow.WorkflowInstanceLookup, workflow.WorkflowApprovals, workflow.WorkflowSlas
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">2</span> <strong>Create workflow</strong> (POST /api/workflows – add draft)<br>
+                <span class="affects">Affects:</span> INSERT into Workflows, INSERT into WorkflowSteps
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">3</span> <strong>Publish workflow</strong> (POST /api/workflows/{id}/publish)<br>
+                <span class="creates">Creates:</span> WorkflowInstances_{suffix}, WorkflowStepInstances_{suffix}, WorkflowInstanceSlas_{suffix}, WorkflowInstanceUserState_{suffix}, WorkflowComments_{suffix}, WorkflowAttachments_{suffix}, WorkflowForms_{suffix}, WorkflowTasks_{suffix}, WorkflowSignatures_{suffix}, WorkflowDocuments_{suffix}, WorkflowEmails_{suffix}, WorkflowAiValidations_{suffix}, WorkflowPdfAnnotations_{suffix}<br>
+                <span class="affects">Affects:</span> UPDATE Workflows (Status = Published)
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">4</span> <strong>Start instance</strong> (POST /api/workflows/{id}/start)<br>
+                <span class="affects">Affects:</span> INSERT into WorkflowInstanceLookup, INSERT into WorkflowInstances_{suffix}, INSERT into WorkflowStepInstances_{suffix}
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">5</span> <strong>Approve / Reject</strong> (POST .../approve or .../reject)<br>
+                <span class="affects">Affects:</span> UPDATE WorkflowStepInstances_{suffix}, INSERT into WorkflowApprovals, UPDATE WorkflowInstances_{suffix}
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">6</span> <strong>Add comment, upload attachment</strong><br>
+                <span class="affects">Affects:</span> INSERT into WorkflowComments_{suffix}, WorkflowAttachments_{suffix}, etc.
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>1. Overview</h2>
+            <p>Workflow schema has two phases:</p>
+            <ul style="margin-left: 1.5rem; margin-top: 0.5rem;">
+                <li><strong>setup-schema</strong> – Base tables (definitions, lookup). Created once.</li>
+                <li><strong>publish</strong> – Each workflow gets its own set of tables when you publish it.</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>1a. Why Separate Tables?</h2>
+            <div class="plain-box">
+                <strong>In plain English:</strong> Think of it like a filing system. You don't mix <em>recipe cards</em> with <em>invoices</em>. Each type of data goes in its own drawer. Same here: definitions, running instances, and approvals each have their own table.
+            </div>
+            <table>
+                <thead><tr><th>Table</th><th>Why separate? (Simple)</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Workflows</strong></td><td>Stores the blueprint (template). Rarely changes. Separate so template edits don't touch millions of running items.</td></tr>
+                    <tr><td><strong>WorkflowSteps</strong></td><td>Steps in the workflow (Step 1 → Step 2 → Step 3). One workflow = many steps. Separate because it's different data: "what to do" vs "who did it".</td></tr>
+                    <tr><td><strong>WorkflowInstanceLookup</strong></td><td><strong>Key table.</strong> Like an index: "Which workflow is this item in?" Needed for Inbox / Sent / Completed across all workflows. Without it we'd have to check every workflow table one by one.</td></tr>
+                    <tr><td><strong>WorkflowApprovals</strong></td><td>Who approved, when, and comments. Separate for easy reporting and audit.</td></tr>
+                    <tr><td><strong>WorkflowSlas</strong></td><td>Rules (e.g. "respond in 24 hrs"). Separate from runtime tracking (actual deadlines).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>1b. Why Per-Workflow Tables (Not One Big Table)?</h2>
+            <div class="plain-box">
+                <strong>In plain English:</strong> Imagine one huge table with all workflow types (Invoice Approval, Leave Request, Purchase Order...). Millions of rows, slow searches. Instead, each workflow type gets its own table. Like separate filing cabinets: Invoice Approvals in one, Leave Requests in another. Faster and easier to manage.
+            </div>
+            <table>
+                <thead><tr><th>Reason</th><th>Simple explanation</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Speed</strong></td><td>Smaller tables = faster searches. No need to filter by "which workflow?" every time.</td></tr>
+                    <tr><td><strong>No blocking</strong></td><td>Heavy traffic on Invoice Approval doesn't slow down Leave Request. Each workflow is isolated.</td></tr>
+                    <tr><td><strong>Flexibility</strong></td><td>Invoice workflow can have different columns than Leave workflow. Each table can have its own structure.</td></tr>
+                    <tr><td><strong>Easy maintenance</strong></td><td>Archive or move one workflow's data without touching others.</td></tr>
+                </tbody>
+            </table>
+            <div class="success-box">
+                <strong>WorkflowInstanceLookup</strong> ties them together. When you open Inbox, we check this table first to see which workflow each item belongs to, then fetch details from the right per-workflow table.
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>1c. Why WorkflowInstanceLookup?</h2>
+            <div class="plain-box">
+                <strong>In plain English:</strong> Data is split across many tables (one per workflow). Inbox needs "all items assigned to me" from ALL workflows. Lookup is the central index: it tells us InstanceId → WorkflowId so we know where to look. Without it, we'd have to query every workflow table and merge results = slow.
+            </div>
+            <p><strong>What it stores:</strong> InstanceId, WorkflowId, Status, AssignedToUserId, StartedBy. Small rows. Heavy data (forms, attachments) stays in the per-workflow tables.</p>
+        </div>
+
+        <div class="section">
+            <h2>2. Base Tables (setup-schema)</h2>
+            <p>Created once per tenant. Run CreateWorkflowSchemaComplete.sql.</p>
+
+            <h3>workflow.Workflows</h3>
+            <p><strong>What it is:</strong> Workflow templates (e.g. "Invoice Approval", "Leave Request"). One row per workflow. Changes rarely.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Id</td><td>uniqueidentifier</td><td>Primary key</td></tr>
+                    <tr><td>TenantId</td><td>uniqueidentifier</td><td>Tenant owner</td></tr>
+                    <tr><td>Name</td><td>nvarchar(256)</td><td>Display name</td></tr>
+                    <tr><td>Description</td><td>nvarchar(2000)</td><td>Optional description</td></tr>
+                    <tr><td>Status</td><td>int</td><td>0=Draft, 1=Published, 2=Archived</td></tr>
+                    <tr><td>TriggerType</td><td>int</td><td>0=Manual, 1=Scheduled, 2=Event</td></tr>
+                    <tr><td>TriggerConfig</td><td>nvarchar(4000)</td><td>JSON config</td></tr>
+                </tbody>
+            </table>
+
+            <h3>workflow.WorkflowSteps</h3>
+            <p><strong>What it is:</strong> Steps in each workflow (Submit → Manager Approve → Finance Approve → Done). Order, approve/reject paths.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Id</td><td>uniqueidentifier</td><td>Primary key</td></tr>
+                    <tr><td>WorkflowId</td><td>uniqueidentifier</td><td>FK to Workflows</td></tr>
+                    <tr><td>Name</td><td>nvarchar(256)</td><td>Step name</td></tr>
+                    <tr><td>StepType</td><td>int</td><td>0=Task, 1=Approval, 2=Notification, 3=Automation</td></tr>
+                    <tr><td>Order</td><td>int</td><td>Execution order</td></tr>
+                    <tr><td>AssignedToRole</td><td>nvarchar(64)</td><td>Role for assignment</td></tr>
+                    <tr><td>ApprovedNextStepId</td><td>uniqueidentifier</td><td>Next step on approve</td></tr>
+                    <tr><td>RejectedNextStepId</td><td>uniqueidentifier</td><td>Next step on reject</td></tr>
+                    <tr><td>ApprovalPolicy</td><td>int</td><td>0=AllMustApprove, 1=AnyOneApprove</td></tr>
+                </tbody>
+            </table>
+
+            <h3>workflow.WorkflowInstanceLookup</h3>
+            <p><strong>What it is:</strong> Index: InstanceId → WorkflowId. Used for Inbox, Sent, Completed. Instance details live in per-workflow tables.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>InstanceId</td><td>uniqueidentifier</td><td>Primary key</td></tr>
+                    <tr><td>WorkflowId</td><td>uniqueidentifier</td><td>Which workflow (→ suffix)</td></tr>
+                    <tr><td>Status</td><td>int</td><td>Instance status</td></tr>
+                    <tr><td>AssignedToUserId</td><td>uniqueidentifier</td><td>Inbox filter</td></tr>
+                    <tr><td>StartedBy</td><td>uniqueidentifier</td><td>Sent filter</td></tr>
+                </tbody>
+            </table>
+
+            <h3>workflow.WorkflowApprovals</h3>
+            <p><strong>What it is:</strong> Who approved/rejected, when, and comments. One row per action. For audit and reports.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>WorkflowInstanceId</td><td>uniqueidentifier</td><td>Instance</td></tr>
+                    <tr><td>StepInstanceId</td><td>uniqueidentifier</td><td>Step instance</td></tr>
+                    <tr><td>AssignedToUserId</td><td>uniqueidentifier</td><td>Approver</td></tr>
+                    <tr><td>Status</td><td>int</td><td>0=Pending, 1=Approved, 2=Rejected</td></tr>
+                    <tr><td>Comments</td><td>nvarchar(2000)</td><td>Approval comment</td></tr>
+                </tbody>
+            </table>
+
+            <h3>workflow.WorkflowSlas</h3>
+            <p><strong>What it is:</strong> Rules per workflow: response time, resolution time, escalation. Separate from actual SLA tracking on instances.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>WorkflowId</td><td>uniqueidentifier</td><td>FK to Workflows</td></tr>
+                    <tr><td>Priority</td><td>int</td><td>0=Low … 3=Critical</td></tr>
+                    <tr><td>ResponseTimeMinutes</td><td>int</td><td>First response deadline</td></tr>
+                    <tr><td>ResolutionTimeMinutes</td><td>int</td><td>Complete by</td></tr>
+                    <tr><td>EscalateToRole</td><td>nvarchar(64)</td><td>Escalation target</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>3. Dynamic Per-Workflow Tables (created on publish)</h2>
+            <p>When you publish a workflow, we create tables like <code>WorkflowInstances_8fc95f64</code> (suffix = first 8 chars of workflow Id).</p>
+            <div class="plain-box">
+                <strong>Why separate tables for each?</strong> Same idea as 1b: one workflow = one set of tables. Comments, attachments, forms, etc. are separate so listing instances stays fast. We load details (comments, files) only when the user opens an item.
+            </div>
+            <table>
+                <thead><tr><th>Table</th><th>What it holds</th><th>Why separate?</th></tr></thead>
+                <tbody>
+                    <tr><td>WorkflowInstances_{suffix}</td><td>Each running workflow (status, who started it)</td><td>Core data. Kept lean.</td></tr>
+                    <tr><td>WorkflowStepInstances_{suffix}</td><td>Current step per instance → <strong>Inbox count</strong></td><td>One instance = many steps. Inbox filters by AssignedToUserId here.</td></tr>
+                    <tr><td>WorkflowInstanceSlas_{suffix}</td><td>Deadline tracking</td><td>Updated often. Separate from main instance.</td></tr>
+                    <tr><td>WorkflowInstanceUserState_{suffix}</td><td>Read/unread per user</td><td>One instance = many user states. Don't bloat instance row.</td></tr>
+                    <tr><td>WorkflowComments_{suffix}</td><td>Comments</td><td>One instance = many comments. Load on demand.</td></tr>
+                    <tr><td>WorkflowAttachments_{suffix}</td><td>Uploaded files</td><td>One instance = many files. Load when user opens item.</td></tr>
+                    <tr><td>WorkflowForms_{suffix}</td><td>Form data (JSON)</td><td>Can be large. Don't slow instance listing.</td></tr>
+                    <tr><td>WorkflowTasks_{suffix}</td><td>Sub-tasks</td><td>One instance = many tasks. Separate for clarity.</td></tr>
+                    <tr><td>WorkflowSignatures_{suffix}</td><td>Digital signatures</td><td>Audit. One instance = many signatures.</td></tr>
+                    <tr><td>WorkflowDocuments_{suffix}</td><td>Links to DMS documents</td><td>Checklist. Separate so instance stays small.</td></tr>
+                    <tr><td>WorkflowEmails_{suffix}</td><td>Emails sent</td><td>Log. Don't load with instance.</td></tr>
+                    <tr><td>WorkflowAiValidations_{suffix}</td><td>AI check results</td><td>Can be large. Load on demand.</td></tr>
+                    <tr><td>WorkflowPdfAnnotations_{suffix}</td><td>Annotations on PDFs</td><td>Many per doc. Load when viewing PDF.</td></tr>
+                </tbody>
+            </table>
+
+            <h3>workflow.WorkflowStepInstances_{suffix}</h3>
+            <p><strong>Purpose:</strong> Per-instance step execution. <strong>Inbox count</strong> = rows where AssignedToUserId = current user, Status = Running.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Id</td><td>uniqueidentifier</td><td>Primary key (→ stepInstanceId for approve/reject)</td></tr>
+                    <tr><td>WorkflowInstanceId</td><td>uniqueidentifier</td><td>FK to Instances</td></tr>
+                    <tr><td>StepName</td><td>nvarchar(256)</td><td>Display name</td></tr>
+                    <tr><td>Status</td><td>int</td><td>0=Pending, 1=Running, 2=Completed, 3=Cancelled</td></tr>
+                    <tr><td>AssignedToUserId</td><td>uniqueidentifier</td><td>Filter for inbox (assigned to me)</td></tr>
+                </tbody>
+            </table>
+
+            <h3>workflow.WorkflowInstances_{suffix}</h3>
+            <p><strong>Purpose:</strong> Workflow executions. StartedBy for sent count; Status for completed filter.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Id</td><td>uniqueidentifier</td><td>instanceId in API</td></tr>
+                    <tr><td>Status</td><td>int</td><td>0=Pending, 1=Running, 2=Completed, 3=Failed, 4=Cancelled</td></tr>
+                    <tr><td>StartedBy</td><td>uniqueidentifier</td><td>Sent count filter</td></tr>
+                    <tr><td>CurrentStepInstanceId</td><td>uniqueidentifier</td><td>Active step</td></tr>
+                    <tr><td>Context</td><td>nvarchar(4000)</td><td>JSON workflow data</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>4. Inbox / Sent / Completed Count Logic</h2>
+            <p>API: <code>GET /api/workflows/counts</code></p>
+            <div class="plain-box">
+                <strong>In plain English:</strong><br>
+                • <strong>Inbox</strong> = Items assigned to me, waiting for my action. We count running steps where AssignedToUserId = me.<br>
+                • <strong>Sent</strong> = Items I started, still in progress. We count instances where StartedBy = me.<br>
+                • <strong>Completed</strong> = All finished items (anyone). We count instances where Status = Completed.
+            </div>
+            <div class="success-box">
+                <strong>Tables used:</strong><br>
+                Inbox → WorkflowInstanceLookup + WorkflowStepInstances_{suffix} (AssignedToUserId, Status=Running)<br>
+                Sent → WorkflowInstanceLookup (StartedBy, Status=Running/Pending)<br>
+                Completed → WorkflowInstanceLookup (Status=Completed)
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>5. Query Patterns for Inbox</h2>
+            <pre><code>-- Get inbox items (assigned to me, running steps)
+-- 1. Get all workflow suffixes for tenant
+-- 2. For each WorkflowStepInstances_{suffix}:
+SELECT wi.Id, wi.ReferenceNumber, wi.CustomerName, wi.Status, ssi.Id AS StepInstanceId
+FROM workflow.WorkflowInstances_{suffix} wi
+JOIN workflow.WorkflowStepInstances_{suffix} ssi ON ssi.WorkflowInstanceId = wi.Id
+WHERE ssi.AssignedToUserId = @CurrentUserId AND ssi.Status = 1  -- Running
+  AND wi.Status = 1  -- Running
+ORDER BY wi.LastActivityAtUtc DESC
+OFFSET @Skip ROWS FETCH NEXT @PageSize ROWS ONLY;</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>6. API Shape</h2>
+            <table>
+                <thead><tr><th>API</th><th>Tables used</th></tr></thead>
+                <tbody>
+                    <tr><td>GET /api/workflows/counts</td><td>WorkflowInstanceLookup, WorkflowStepInstances_{suffix}</td></tr>
+                    <tr><td>GET /api/workflows/inbox</td><td>WorkflowInstanceLookup + WorkflowStepInstances_{suffix}</td></tr>
+                    <tr><td>GET /api/workflows/sent</td><td>WorkflowInstanceLookup (StartedBy)</td></tr>
+                    <tr><td>GET /api/workflows/completed</td><td>WorkflowInstanceLookup (Status=Completed)</td></tr>
+                    <tr><td>POST .../approve</td><td>WorkflowStepInstances_{suffix}, WorkflowApprovals, WorkflowInstances_{suffix}</td></tr>
+                    <tr><td>GET .../attachments</td><td>WorkflowAttachments_{suffix}</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            <p>ezofisAPI · Workflow Tables Design</p>
+            <p><a href="index.html">← API Docs</a> · <a href="dms-repo-tables.html">DMS Repository Tables</a></p>
+        </footer>
+    </div>
+</body>
+</html>

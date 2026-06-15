@@ -1,0 +1,362 @@
+using Microsoft.Data.SqlClient;
+using SaaSApp.MultiTenancy;
+using SaaSApp.Repository.Application.Contracts;
+
+namespace SaaSApp.Repository.Infrastructure.Services;
+
+public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
+{
+    private readonly ITenantConnectionProvider _connectionProvider;
+    private readonly IStaticRepositoryProvisioner _provisioner;
+    private readonly IRepositoryFileStorage _fileStorage;
+    private readonly IRepositoryItemActivityService _activity;
+
+    public RepositoryItemQueryService(
+        ITenantConnectionProvider connectionProvider,
+        IStaticRepositoryProvisioner provisioner,
+        IRepositoryFileStorage fileStorage,
+        IRepositoryItemActivityService activity)
+    {
+        _connectionProvider = connectionProvider;
+        _provisioner = provisioner;
+        _fileStorage = fileStorage;
+        _activity = activity;
+    }
+
+    public async Task<ItemListFilterSchemaDto> GetItemListFilterSchemaAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Repository not found.");
+        return RepositoryItemFilterHelper.BuildFilterSchema(repo);
+    }
+
+    public async Task<PagedResult<RepositoryItemListDto>> ListItemsAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        RepositoryItemListQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Repository not found.");
+
+        if (!RepositorySqlHelper.IsValidItemsTableName(repo.ItemsTableName))
+            throw new InvalidOperationException("Invalid items table.");
+
+        var table = RepositorySqlHelper.QualifiedItemsTable(repo.ItemsTableName);
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var tableColumns = await RepositoryItemTableColumns.LoadAsync(connection, repo.ItemsTableName, cancellationToken);
+        var allowedColumns = RepositoryItemFilterHelper.BuildFilterableColumns(repo, tableColumns);
+        var filters = RepositoryItemFilterHelper.ParseFilters(query.Filters);
+
+        var page = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 1, RepositoryItemCursorHelper.MaxPageSize);
+        var sortCol = RepositoryItemFilterHelper.ResolveSortColumn(query.SortBy, allowedColumns);
+        if (!RepositoryItemTableColumns.Has(tableColumns, sortCol))
+            sortCol = RepositoryItemTableColumns.Has(tableColumns, "CreatedAtUtc") ? "CreatedAtUtc" : "FileName";
+
+        var sortAscending = string.Equals(query.SortOrder, "asc", StringComparison.OrdinalIgnoreCase);
+        var sortDir = sortAscending ? "ASC" : "DESC";
+        var useCursor = !string.IsNullOrWhiteSpace(query.Cursor);
+        int offset = 0;
+        if (!useCursor)
+            offset = (page - 1) * pageSize;
+
+        var where = new List<string> { "i.RepositoryId = @RepositoryId", "i.IsDeleted = 0" };
+        var parameters = new List<SqlParameter> { new("@RepositoryId", repositoryId) };
+
+        RepositoryItemFilterHelper.ApplyEqualityFilters(where, parameters, filters, allowedColumns, repo);
+
+        if (useCursor)
+        {
+            var (cursorSortCol, cursorAscending, cursorValue, cursorId) =
+                RepositoryItemCursorHelper.Decode(query.Cursor!);
+            if (!string.Equals(cursorSortCol, sortCol, StringComparison.OrdinalIgnoreCase)
+                || cursorAscending != sortAscending)
+            {
+                throw new ArgumentException(
+                    "cursor sort does not match sortBy/sortOrder. Use the same sort or omit cursor.");
+            }
+
+            RepositoryItemCursorHelper.ApplyKeysetFilter(
+                where, parameters, sortCol, sortAscending, cursorValue, cursorId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            where.Add("i.FileName LIKE @Search");
+            parameters.Add(new SqlParameter("@Search", $"%{query.Search.Trim()}%"));
+        }
+
+        var dateFilterCol = RepositoryItemListReader.ResolveDateFilterColumn(tableColumns, repo);
+        if (query.DateFrom.HasValue && dateFilterCol != null)
+        {
+            where.Add($"i.[{dateFilterCol}] >= @DateFrom");
+            parameters.Add(new SqlParameter("@DateFrom", query.DateFrom.Value.Date));
+        }
+
+        if (query.DateTo.HasValue && dateFilterCol != null)
+        {
+            where.Add($"i.[{dateFilterCol}] <= @DateTo");
+            parameters.Add(new SqlParameter("@DateTo", query.DateTo.Value.Date));
+        }
+
+        var whereSql = string.Join(" AND ", where);
+        var selectList = RepositoryItemListReader.BuildSelectList(tableColumns);
+
+        int total = -1;
+        if (!query.SkipTotal)
+        {
+            var countSql = $"SELECT COUNT(*) FROM {table} i WHERE {whereSql};";
+            await using var countCmd = new SqlCommand(countSql, connection);
+            RepositorySqlHelper.AddParameters(countCmd, parameters);
+            total = Convert.ToInt32(await countCmd.ExecuteScalarAsync(cancellationToken));
+        }
+
+        var pagingSql = useCursor
+            ? "FETCH NEXT @PageSize ROWS ONLY"
+            : "OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
+
+        var dataSql = $"""
+            SELECT {selectList}
+            FROM {table} i
+            INNER JOIN repository.StorageProviders sp ON sp.Id = i.StorageProviderId
+            WHERE {whereSql}
+            ORDER BY i.[{sortCol}] {sortDir}, i.Id {sortDir}
+            {pagingSql};
+            """;
+
+        var list = new List<RepositoryItemListDto>();
+        await using (var cmd = new SqlCommand(dataSql, connection))
+        {
+            RepositorySqlHelper.AddParameters(cmd, parameters);
+            if (!useCursor)
+                cmd.Parameters.AddWithValue("@Offset", offset);
+            cmd.Parameters.AddWithValue("@PageSize", pageSize);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                list.Add(RepositoryItemListReader.ReadRow(reader, tableColumns));
+        }
+
+        string? nextCursor = null;
+        if (list.Count == pageSize)
+        {
+            var last = list[^1];
+            var sortValue = RepositoryItemCursorHelper.GetSortValueFromRow(last, sortCol);
+            nextCursor = RepositoryItemCursorHelper.Encode(sortCol, sortAscending, sortValue, last.Id);
+        }
+
+        return new PagedResult<RepositoryItemListDto>(list, useCursor ? 0 : page, pageSize, total, nextCursor);
+    }
+
+    public async Task<IReadOnlyList<FacetValueDto>> GetFacetsAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        string fieldName,
+        string? scopeFilters,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Repository not found.");
+
+        var allowedColumns = RepositoryItemFilterHelper.BuildFilterableColumns(repo);
+        var col = RepositoryItemFilterHelper.ResolveFilterColumn(fieldName, allowedColumns, repo);
+
+        var table = RepositorySqlHelper.QualifiedItemsTable(repo.ItemsTableName);
+        limit = Math.Clamp(limit, 1, 500);
+
+        var where = new List<string> { "RepositoryId = @RepositoryId", "IsDeleted = 0", $"[{col}] IS NOT NULL" };
+        var parameters = new List<SqlParameter> { new("@RepositoryId", repositoryId) };
+
+        var scope = RepositoryItemFilterHelper.ParseFilters(scopeFilters);
+        RepositoryItemFilterHelper.ApplyEqualityFilters(where, parameters, scope, allowedColumns, repo, tableAlias: string.Empty);
+
+        var sql = $"""
+            SELECT TOP (@Limit) [{col}] AS Value, COUNT(*) AS Cnt
+            FROM {table}
+            WHERE {string.Join(" AND ", where)}
+            GROUP BY [{col}]
+            ORDER BY COUNT(*) DESC, [{col}];
+            """;
+
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var cmd = new SqlCommand(sql, connection);
+        RepositorySqlHelper.AddParameters(cmd, parameters);
+        cmd.Parameters.AddWithValue("@Limit", limit);
+
+        var list = new List<FacetValueDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            list.Add(new FacetValueDto(reader.GetString(0), reader.GetInt32(1)));
+
+        return list;
+    }
+
+    public async Task<RepositoryItemDetailDto?> GetItemAsync(Guid repositoryId, Guid tenantId, Guid itemId, CancellationToken cancellationToken = default)
+    {
+        var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Repository not found.");
+
+        var table = RepositorySqlHelper.QualifiedItemsTable(repo.ItemsTableName);
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var sql = $"""
+            SELECT i.*, sp.Code
+            FROM {table} i
+            INNER JOIN repository.StorageProviders sp ON sp.Id = i.StorageProviderId
+            WHERE i.Id = @ItemId AND i.RepositoryId = @RepositoryId AND i.IsDeleted = 0;
+            """;
+
+        await using var cmd = new SqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@ItemId", itemId);
+        cmd.Parameters.AddWithValue("@RepositoryId", repositoryId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+
+        var providerCode = reader.GetString(reader.GetOrdinal("Code"));
+        var fields = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            var name = reader.GetName(i);
+            if (name is "Code" or "ValidFrom" or "ValidTo")
+                continue;
+            fields[name] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+        }
+
+        return new RepositoryItemDetailDto(
+            reader.GetGuid(reader.GetOrdinal("Id")),
+            reader.IsDBNull(reader.GetOrdinal("FileName")) ? null : reader.GetString(reader.GetOrdinal("FileName")),
+            reader.IsDBNull(reader.GetOrdinal("FilePath")) ? null : reader.GetString(reader.GetOrdinal("FilePath")),
+            reader.IsDBNull(reader.GetOrdinal("FileType")) ? null : reader.GetString(reader.GetOrdinal("FileType")),
+            reader.IsDBNull(reader.GetOrdinal("FileSize")) ? null : reader.GetInt32(reader.GetOrdinal("FileSize")),
+            reader.GetGuid(reader.GetOrdinal("StorageProviderId")),
+            providerCode,
+            fields);
+    }
+
+    public async Task<RepositoryItemWorkspaceDto?> GetItemWorkspaceAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        Guid itemId,
+        CancellationToken cancellationToken = default)
+    {
+        var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Repository not found.");
+
+        var item = await GetItemAsync(repositoryId, tenantId, itemId, cancellationToken);
+        if (item == null)
+            return null;
+
+        return RepositoryItemWorkspaceBuilder.Build(
+            repositoryId,
+            repo,
+            item.Id,
+            item.FileName,
+            item.FileType,
+            item.FileSize,
+            item.StorageProviderId,
+            item.StorageProviderCode,
+            item.Fields);
+    }
+
+    public async Task<Guid> CreateItemAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        CreateRepositoryItemRequest request,
+        Guid? userId,
+        CancellationToken cancellationToken = default)
+    {
+        var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Repository not found.");
+
+        var itemId = Guid.NewGuid();
+        var storageProviderId = request.StorageProviderId ?? repo.StorageProviderId;
+
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await RepositoryItemInsertHelper.InsertItemAsync(
+            connection, repo, tenantId, repositoryId, itemId, storageProviderId, request, userId, cancellationToken);
+
+        return itemId;
+    }
+
+    public async Task<UpdateRepositoryItemMetadataResult?> UpdateItemMetadataAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        Guid itemId,
+        IReadOnlyDictionary<string, string> metadata,
+        Guid? userId,
+        CancellationToken cancellationToken = default)
+    {
+        var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Repository not found.");
+
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var updatedFieldCount = await RepositoryItemMetadataUpdateHelper.UpdateAsync(
+            connection, repo, tenantId, repositoryId, itemId, metadata, userId, cancellationToken);
+
+        if (updatedFieldCount < 0)
+            return null;
+
+        await _activity.RecordTimelineEventAsync(
+            repositoryId,
+            tenantId,
+            itemId,
+            "user",
+            "Metadata updated",
+            $"{updatedFieldCount} field(s) changed",
+            "User",
+            userId?.ToString("D"),
+            userId,
+            userId,
+            cancellationToken);
+
+        return new UpdateRepositoryItemMetadataResult(itemId, updatedFieldCount);
+    }
+
+    public async Task<RepositoryItemFileContent?> OpenItemFileAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        Guid itemId,
+        CancellationToken cancellationToken = default)
+    {
+        var item = await GetItemAsync(repositoryId, tenantId, itemId, cancellationToken);
+        if (item == null || string.IsNullOrWhiteSpace(item.FilePath))
+            return null;
+
+        var providerCode = string.IsNullOrWhiteSpace(item.StorageProviderCode) ? "EZOFIS" : item.StorageProviderCode;
+        if (!_fileStorage.CanRead(providerCode))
+            throw new InvalidOperationException($"File download is not available for storage provider '{providerCode}'.");
+
+        var stream = await _fileStorage.OpenReadAsync(tenantId, item.FilePath, providerCode, cancellationToken);
+        var contentType = string.IsNullOrWhiteSpace(item.FileType) ? "application/octet-stream" : item.FileType;
+        var fileName = string.IsNullOrWhiteSpace(item.FileName) ? "file" : item.FileName;
+        return new RepositoryItemFileContent(stream, fileName, contentType, item.FileSize);
+    }
+}

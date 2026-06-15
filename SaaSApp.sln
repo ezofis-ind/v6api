@@ -1,0 +1,162 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Api", "src\Api\SaaSApp.Api.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.SharedKernel", "src\BuildingBlocks\SharedKernel\SaaSApp.SharedKernel.csproj", "{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.MultiTenancy", "src\BuildingBlocks\MultiTenancy\SaaSApp.MultiTenancy.csproj", "{C3D4E5F6-A7B8-9012-CDEF-123456789012}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Logging", "src\BuildingBlocks\Logging\SaaSApp.Logging.csproj", "{D4E5F6A7-B8C9-0123-DEF0-234567890123}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Security", "src\BuildingBlocks\Security\SaaSApp.Security.csproj", "{E5F6A7B8-C9D0-1234-EF01-345678901234}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Catalog", "src\BuildingBlocks\Catalog\SaaSApp.Catalog.csproj", "{E6F7B8C9-D0E1-2345-F012-456789012346}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Users.Domain", "src\Modules\Users\Users.Domain\SaaSApp.Users.Domain.csproj", "{F6A7B8C9-D0E1-2345-F012-456789012345}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Users.Application", "src\Modules\Users\Users.Application\SaaSApp.Users.Application.csproj", "{A7B8C9D0-E1F2-3456-0123-567890123456}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Users.Infrastructure", "src\Modules\Users\Users.Infrastructure\SaaSApp.Users.Infrastructure.csproj", "{B8C9D0E1-F2A3-4567-1234-678901234567}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Billing.Domain", "src\Modules\Billing\Billing.Domain\SaaSApp.Billing.Domain.csproj", "{C9D0E1F2-A3B4-5678-2345-789012345678}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Billing.Application", "src\Modules\Billing\Billing.Application\SaaSApp.Billing.Application.csproj", "{D0E1F2A3-B4C5-6789-3456-890123456789}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Billing.Infrastructure", "src\Modules\Billing\Billing.Infrastructure\SaaSApp.Billing.Infrastructure.csproj", "{E1F2A3B4-C5D6-7890-4567-901234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Reporting.Domain", "src\Modules\Reporting\Reporting.Domain\SaaSApp.Reporting.Domain.csproj", "{F2A3B4C5-D6E7-8901-5678-012345678901}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Reporting.Application", "src\Modules\Reporting\Reporting.Application\SaaSApp.Reporting.Application.csproj", "{A3B4C5D6-E7F8-9012-6789-123456789012}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Reporting.Infrastructure", "src\Modules\Reporting\Reporting.Infrastructure\SaaSApp.Reporting.Infrastructure.csproj", "{B4C5D6E7-F8A9-0123-7890-234567890123}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Workflow.Domain", "src\Modules\Workflow\Workflow.Domain\SaaSApp.Workflow.Domain.csproj", "{C5D6E7F8-A9B0-1234-8901-345678901234}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Workflow.Application", "src\Modules\Workflow\Workflow.Application\SaaSApp.Workflow.Application.csproj", "{D6E7F8A9-B0C1-2345-9012-456789012345}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Workflow.Infrastructure", "src\Modules\Workflow\Workflow.Infrastructure\SaaSApp.Workflow.Infrastructure.csproj", "{E7F8A9B0-C1D2-3456-0123-567890123456}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Dms.Domain", "src\Modules\Dms\Dms.Domain\SaaSApp.Dms.Domain.csproj", "{F8A9B0C1-D2E3-4567-1234-678901234567}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Dms.Infrastructure", "src\Modules\Dms\Dms.Infrastructure\SaaSApp.Dms.Infrastructure.csproj", "{A9B0C1D2-E3F4-5678-2345-789012345678}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Repository.Application", "src\Modules\Repository\Repository.Application\SaaSApp.Repository.Application.csproj", "{C1D2E3F4-A5B6-7890-CDEF-123456789ABC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.Repository.Infrastructure", "src\Modules\Repository\Repository.Infrastructure\SaaSApp.Repository.Infrastructure.csproj", "{D2E3F4A5-B6C7-8901-DEF0-234567890BCD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.HangfireWorker", "src\Workers\HangfireWorker\SaaSApp.HangfireWorker.csproj", "{B1C2D3E4-F5A6-7890-1234-567890ABCDEF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{7248FEB8-F08C-432C-9686-D85667C76D1F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Modules", "Modules", "{D0C389D7-C923-478D-B6BB-FBBBCC237142}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SaaSApp.BlobStorage", "src\Modules\BlobStorage\SaaSApp.BlobStorage.csproj", "{2DE27E3E-1AD7-4C23-90F9-10AA3EEA08FF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-123456789012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-123456789012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-123456789012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3D4E5F6-A7B8-9012-CDEF-123456789012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-234567890123}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-234567890123}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-234567890123}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D4E5F6A7-B8C9-0123-DEF0-234567890123}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-345678901234}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-345678901234}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-345678901234}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5F6A7B8-C9D0-1234-EF01-345678901234}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E6F7B8C9-D0E1-2345-F012-456789012346}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E6F7B8C9-D0E1-2345-F012-456789012346}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E6F7B8C9-D0E1-2345-F012-456789012346}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E6F7B8C9-D0E1-2345-F012-456789012346}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-456789012345}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-456789012345}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-456789012345}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6A7B8C9-D0E1-2345-F012-456789012345}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A7B8C9D0-E1F2-3456-0123-567890123456}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7B8C9D0-E1F2-3456-0123-567890123456}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7B8C9D0-E1F2-3456-0123-567890123456}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7B8C9D0-E1F2-3456-0123-567890123456}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B8C9D0E1-F2A3-4567-1234-678901234567}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B8C9D0E1-F2A3-4567-1234-678901234567}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B8C9D0E1-F2A3-4567-1234-678901234567}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B8C9D0E1-F2A3-4567-1234-678901234567}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9D0E1F2-A3B4-5678-2345-789012345678}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9D0E1F2-A3B4-5678-2345-789012345678}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9D0E1F2-A3B4-5678-2345-789012345678}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9D0E1F2-A3B4-5678-2345-789012345678}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-890123456789}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-890123456789}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-890123456789}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-890123456789}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-901234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-901234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-901234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-901234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-012345678901}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-012345678901}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-012345678901}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-012345678901}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-123456789012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-123456789012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-123456789012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-123456789012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B4C5D6E7-F8A9-0123-7890-234567890123}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B4C5D6E7-F8A9-0123-7890-234567890123}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B4C5D6E7-F8A9-0123-7890-234567890123}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B4C5D6E7-F8A9-0123-7890-234567890123}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C5D6E7F8-A9B0-1234-8901-345678901234}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C5D6E7F8-A9B0-1234-8901-345678901234}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C5D6E7F8-A9B0-1234-8901-345678901234}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C5D6E7F8-A9B0-1234-8901-345678901234}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D6E7F8A9-B0C1-2345-9012-456789012345}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D6E7F8A9-B0C1-2345-9012-456789012345}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D6E7F8A9-B0C1-2345-9012-456789012345}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D6E7F8A9-B0C1-2345-9012-456789012345}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E7F8A9B0-C1D2-3456-0123-567890123456}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E7F8A9B0-C1D2-3456-0123-567890123456}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E7F8A9B0-C1D2-3456-0123-567890123456}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E7F8A9B0-C1D2-3456-0123-567890123456}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F8A9B0C1-D2E3-4567-1234-678901234567}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F8A9B0C1-D2E3-4567-1234-678901234567}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F8A9B0C1-D2E3-4567-1234-678901234567}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F8A9B0C1-D2E3-4567-1234-678901234567}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A9B0C1D2-E3F4-5678-2345-789012345678}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A9B0C1D2-E3F4-5678-2345-789012345678}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A9B0C1D2-E3F4-5678-2345-789012345678}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A9B0C1D2-E3F4-5678-2345-789012345678}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C1D2E3F4-A5B6-7890-CDEF-123456789ABC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C1D2E3F4-A5B6-7890-CDEF-123456789ABC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C1D2E3F4-A5B6-7890-CDEF-123456789ABC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C1D2E3F4-A5B6-7890-CDEF-123456789ABC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D2E3F4A5-B6C7-8901-DEF0-234567890BCD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D2E3F4A5-B6C7-8901-DEF0-234567890BCD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D2E3F4A5-B6C7-8901-DEF0-234567890BCD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D2E3F4A5-B6C7-8901-DEF0-234567890BCD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B1C2D3E4-F5A6-7890-1234-567890ABCDEF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1C2D3E4-F5A6-7890-1234-567890ABCDEF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1C2D3E4-F5A6-7890-1234-567890ABCDEF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1C2D3E4-F5A6-7890-1234-567890ABCDEF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2DE27E3E-1AD7-4C23-90F9-10AA3EEA08FF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2DE27E3E-1AD7-4C23-90F9-10AA3EEA08FF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2DE27E3E-1AD7-4C23-90F9-10AA3EEA08FF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2DE27E3E-1AD7-4C23-90F9-10AA3EEA08FF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{D0C389D7-C923-478D-B6BB-FBBBCC237142} = {7248FEB8-F08C-432C-9686-D85667C76D1F}
+		{2DE27E3E-1AD7-4C23-90F9-10AA3EEA08FF} = {D0C389D7-C923-478D-B6BB-FBBBCC237142}
+	EndGlobalSection
+EndGlobal

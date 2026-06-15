@@ -1,0 +1,41 @@
+## Build
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Dd]ebug/
+[Rr]elease/
+**/PubTmp/
+
+## Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## NuGet
+*.nupkg
+**/packages/
+project.lock.json
+
+## OS / tools
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+## Secrets (use appsettings.example.json as template)
+**/appsettings.json
+**/appsettings.Development.json
+**/appsettings.*.local.json
+.env
+.env.*
+
+## Publish output
+**/publish/
+
+## Analysis / tooling
+.sonarqube/
+**/__pycache__/

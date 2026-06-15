@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DMS Repository Tables - Folder Structure Design | ezofisAPI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --ezofis-primary: #6366f1;
+            --ezofis-secondary: #8b5cf6;
+            --ezofis-accent: #ec4899;
+            --ezofis-dark: #1e293b;
+            --ezofis-light: #f8fafc;
+            --ezofis-border: #e2e8f0;
+            --ezofis-text: #334155;
+            --ezofis-success: #10b981;
+            --ezofis-warning: #f59e0b;
+        }
+        body { font-family: 'Segoe UI', -apple-system, sans-serif; line-height: 1.6; color: var(--ezofis-text); background: var(--ezofis-light); }
+        .header {
+            background: linear-gradient(135deg, var(--ezofis-primary) 0%, var(--ezofis-secondary) 50%, var(--ezofis-accent) 100%);
+            color: white; padding: 2rem; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .header h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
+        .header p { opacity: 0.95; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .section { background: white; margin-bottom: 2rem; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border: 1px solid var(--ezofis-border); }
+        .section h2 { color: var(--ezofis-primary); margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 2px solid var(--ezofis-primary); font-size: 1.5rem; }
+        .section h3 { color: var(--ezofis-secondary); margin-top: 1.5rem; margin-bottom: 0.75rem; font-size: 1.2rem; }
+        pre { background: #1e293b; color: #e2e8f0; padding: 1.25rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; font-size: 0.9rem; }
+        code { font-family: 'Consolas', 'Monaco', monospace; font-size: 0.9rem; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--ezofis-border); }
+        th { background: var(--ezofis-primary); color: white; font-weight: 600; font-size: 0.85rem; }
+        tr:hover { background: var(--ezofis-light); }
+        .info-box { background: linear-gradient(to right, #dbeafe, #eff6ff); border-left: 4px solid #3b82f6; padding: 1rem; margin: 1rem 0; border-radius: 8px; }
+        .success-box { background: linear-gradient(to right, #d1fae5, #ecfdf5); border-left: 4px solid var(--ezofis-success); padding: 1rem; margin: 1rem 0; border-radius: 8px; }
+        .plain-box { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 1rem; margin: 1rem 0; border-radius: 8px; font-size: 1.02rem; }
+        .plain-box strong { color: #92400e; }
+        .flow-diagram { background: #f8fafc; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.9rem; border: 2px solid var(--ezofis-border); margin: 1rem 0; white-space: pre; }
+        .step-box { background: #f0fdf4; border: 2px solid var(--ezofis-success); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+        .step-box .step-num { display: inline-block; background: var(--ezofis-success); color: white; width: 1.8rem; height: 1.8rem; line-height: 1.8rem; text-align: center; border-radius: 50%; font-weight: bold; margin-right: 0.5rem; }
+        .step-box .creates { color: #059669; font-weight: 600; margin-top: 0.5rem; }
+        .step-box .affects { color: #0d9488; margin-top: 0.25rem; }
+        .doc-nav { background: rgba(0,0,0,0.15); padding: 0.5rem 1rem; margin: 0 0 1rem 0; font-size: 0.9rem; border-radius: 0 0 8px 8px; display: inline-block; }
+        .doc-nav a { color: rgba(255,255,255,0.95); margin-right: 1rem; text-decoration: none; }
+        .doc-nav a:hover { text-decoration: underline; }
+        footer { background: linear-gradient(135deg, var(--ezofis-dark) 0%, #334155 100%); color: white; text-align: center; padding: 1.5rem; margin-top: 2rem; }
+        footer a { color: #a5b4fc; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <nav class="doc-nav"><a href="index.html">API Docs</a> · <a href="workflow-tables.html">Workflow Tables</a></nav>
+        <h1>📁 DMS Repository Tables – Folder Structure Metadata Design</h1>
+        <p>Physical columns, FolderHierarchy, query patterns, indexing, API shape, and configurable structure.</p>
+    </div>
+    <div class="container">
+
+        <div class="success-box">
+            <strong>📌 Quick Summary</strong><br>
+            • <strong>Repository</strong> = storage settings. <strong>RepositoryFolderConfig</strong> = folder structure rules (Year→Type→Vendor).<br>
+            • <strong>ezca_{code}_items</strong> = actual documents. One table per tenant/entity for speed and isolation.<br>
+            • <strong>Folder path</strong> = Year / InvoiceType / VendorName. Stored as separate columns for fast filtering.
+        </div>
+
+        <div class="section">
+            <h2>Step-by-Step: What Happens When</h2>
+            <p>Each action creates or affects specific tables. Follow the flow below.</p>
+
+            <div class="step-box">
+                <span class="step-num">1</span> <strong>POST /api/Dms/setup-schema</strong> (run once per tenant, or during signup)<br>
+                <span class="creates">Creates:</span> dms.Repository, dms.RepositoryFolderConfig, dms.DocumentWorkflowLink, dms.sample_items
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">2</span> <strong>Create repository</strong> (insert into Repository with Code, Name, ItemsTableName)<br>
+                <span class="affects">Affects:</span> INSERT into dms.Repository
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">3</span> <strong>Add folder config</strong> (optional – if repo needs custom folder levels)<br>
+                <span class="affects">Affects:</span> INSERT into dms.RepositoryFolderConfig (Year, InvoiceType, VendorName, etc.)
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">4</span> <strong>Create items table for new repo</strong> (run CreateDmsRepositoryItemsTable.sql with suffix e.g. ezca_156)<br>
+                <span class="creates">Creates:</span> dms.ezca_156_items (or dms.{suffix}_items)<br>
+                <span class="affects">Affects:</span> Set Repository.ItemsTableName = "ezca_156_items" when creating repo
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">5</span> <strong>Upload document</strong><br>
+                <span class="affects">Affects:</span> INSERT into dms.sample_items (or dms.ezca_156_items)
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">6</span> <strong>Link document to workflow</strong><br>
+                <span class="affects">Affects:</span> INSERT into dms.DocumentWorkflowLink, UPDATE items table (WorkflowInstanceId)
+            </div>
+
+            <div class="step-box">
+                <span class="step-num">7</span> <strong>Get folder tree / documents</strong> (GET folders/children, GET documents)<br>
+                <span class="affects">Affects:</span> READ from sample_items or ezca_156_items (GROUP BY for tree)
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>1a. Why Separate Tables in DMS?</h2>
+            <div class="plain-box">
+                <strong>In plain English:</strong> Like folders in a filing cabinet. Repository = the cabinet. RepositoryFolderConfig = how folders are organized. Document items = the actual files. Each has its own table because they do different jobs.
+            </div>
+            <table>
+                <thead><tr><th>Table</th><th>What it does (simple)</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>dms.Repository</strong></td><td>Repository settings (name, storage path). One row per repo. Rarely changes.</td></tr>
+                    <tr><td><strong>dms.RepositoryFolderConfig</strong></td><td>Folder structure rules (Year→Type→Vendor, or custom). Different repos can have different structures.</td></tr>
+                    <tr><td><strong>dms.DocumentWorkflowLink</strong></td><td>Links documents to workflow instances. "This invoice is in workflow X". Kept separate so doc and workflow stay independent.</td></tr>
+                    <tr><td><strong>ezca_{code}_items</strong></td><td>Actual documents. Each tenant/entity gets its own table (e.g. ezca_156_items). See 1b.</td></tr>
+                    <tr><td><strong>dms.FolderHierarchy</strong></td><td>Optional. Pre-computed folder tree + counts. Speeds up tree UI. See 1c.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>1b. Why Per-Repository Document Tables (Not One Big Table)?</h2>
+            <div class="plain-box">
+                <strong>In plain English:</strong> Like having separate file drawers for each department. Instead of one huge table with all tenants' documents, we use ezca_156_items, ezca_157_items, etc. Each tenant/repo gets its own table. Faster searches, no mixing of data, easier to scale.
+            </div>
+            <table>
+                <thead><tr><th>Reason</th><th>Simple explanation</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Isolation</strong></td><td>One tenant's heavy usage doesn't slow others. Each has its own table.</td></tr>
+                    <tr><td><strong>Different columns</strong></td><td>Invoice repo may need InvoiceNumber; HR repo may need EmployeeId. Each table can have its own columns.</td></tr>
+                    <tr><td><strong>Speed</strong></td><td>Smaller tables = faster folder drills. No need to filter by RepositoryId on every query.</td></tr>
+                    <tr><td><strong>Easy maintenance</strong></td><td>Archive or move one repo's data without touching others.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>1c. Why FolderHierarchy (Optional)?</h2>
+            <div class="plain-box">
+                <strong>In plain English:</strong> Two options for the folder tree:<br>
+                • <strong>Real-time:</strong> Count documents on each request. Always correct, but slower when you have lots of docs.<br>
+                • <strong>FolderHierarchy:</strong> Pre-calculate folder counts. Faster tree load, but needs a sync step when documents change.
+            </div>
+            <p>FolderHierarchy is a separate table so tree queries don't scan the big document table. Document table = many writes. Folder tree = many reads. Split = faster.</p>
+        </div>
+
+        <div class="section">
+            <h2>2. Mandatory Fields for Folder Path</h2>
+            <div class="plain-box">
+                <strong>In plain English:</strong> Folders are: Year → InvoiceType → VendorName. Example: <code>2025 / Purchase / Acme Corp / INV-001.pdf</code>. We store Year, InvoiceType, VendorName as separate columns so we can filter and index them quickly.
+            </div>
+            <p>Path pattern: <code>Year / InvoiceType / VendorName / invoicenumber.pdf</code></p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Year</td><td>SMALLINT NOT NULL</td><td>e.g. 2025 – Folder level 0</td></tr>
+                    <tr><td>InvoiceType</td><td>NVARCHAR(64) NOT NULL</td><td>Purchase, Sales, Credit Note – Folder level 1</td></tr>
+                    <tr><td>VendorName</td><td>NVARCHAR(256) NOT NULL</td><td>e.g. Acme Corp – Folder level 2</td></tr>
+                    <tr><td>FileName</td><td>NVARCHAR(512) NOT NULL</td><td>e.g. INV-001.pdf (stored filename)</td></tr>
+                    <tr><td>FolderPath</td><td>Computed PERSISTED</td><td>Year + '/' + InvoiceType + '/' + VendorName for display</td></tr>
+                </tbody>
+            </table>
+            <pre><code>FolderPath AS (CAST(Year AS NVARCHAR(4)) + N'/' + InvoiceType + N'/' + VendorName) PERSISTED</code></pre>
+            <p>Use FolderPath for display; use Year, InvoiceType, VendorName for filtering.</p>
+            <div class="info-box">
+                <strong>Why separate columns (Year, InvoiceType, VendorName)?</strong> Filters like "2025" and "Purchase" are fast with indexes. One long path string (e.g. "2025/Purchase/Acme Corp") would need slower text matching. Separate columns = faster queries.
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>3. Folder Hierarchy Table (for Tree + Counts)</h2>
+            <p>Pre-aggregate folder nodes and counts for fast tree rendering. Optional materialized approach.</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Id</td><td>BIGINT IDENTITY</td><td>Primary key</td></tr>
+                    <tr><td>RepositoryId</td><td>UNIQUEIDENTIFIER</td><td>Repository</td></tr>
+                    <tr><td>TenantId</td><td>UNIQUEIDENTIFIER</td><td>Tenant</td></tr>
+                    <tr><td>Year</td><td>SMALLINT NULL</td><td>NULL = root/aggregate</td></tr>
+                    <tr><td>InvoiceType</td><td>NVARCHAR(64) NULL</td><td>Level 1</td></tr>
+                    <tr><td>VendorName</td><td>NVARCHAR(256) NULL</td><td>Level 2</td></tr>
+                    <tr><td>Path</td><td>NVARCHAR(512)</td><td>Display path: "2025", "2025/Purchase", "2025/Purchase/Acme Corp"</td></tr>
+                    <tr><td>Level</td><td>TINYINT</td><td>0=Year, 1=InvoiceType, 2=VendorName, 3=Leaf</td></tr>
+                    <tr><td>DocumentCount</td><td>INT DEFAULT 0</td><td>Pre-computed count</td></tr>
+                    <tr><td>ParentPath</td><td>NVARCHAR(512) NULL</td><td>Parent for tree structure</td></tr>
+                </tbody>
+            </table>
+            <pre><code>CREATE TABLE dms.FolderHierarchy (
+    Id BIGINT IDENTITY(1,1) NOT NULL,
+    RepositoryId UNIQUEIDENTIFIER NOT NULL,
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    Year SMALLINT NULL,
+    InvoiceType NVARCHAR(64) NULL,
+    VendorName NVARCHAR(256) NULL,
+    Path NVARCHAR(512) NOT NULL,
+    Level TINYINT NOT NULL,
+    DocumentCount INT NOT NULL DEFAULT 0,
+    ParentPath NVARCHAR(512) NULL,
+    UpdatedAt DATETIME2(3) NOT NULL DEFAULT SYSUTCDATETIME(),
+    PRIMARY KEY (Id),
+    UNIQUE (RepositoryId, Path),
+    INDEX IX_FolderHierarchy_Repo_Parent (RepositoryId, ParentPath),
+    INDEX IX_FolderHierarchy_Repo_Level (RepositoryId, Level)
+);</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>4. Query Patterns for File Explorer UI</h2>
+
+            <h3>A. Root level (Years with counts)</h3>
+            <pre><code>SELECT Year AS Name, 
+       SUM(DocumentCount) AS DocumentCount,
+       CAST(Year AS NVARCHAR(4)) AS Path
+FROM dms.ezca_156_items
+WHERE IsDeleted = 0 AND RepositoryId = @RepoId
+GROUP BY Year
+ORDER BY Year DESC;</code></pre>
+
+            <h3>B. Children of Year (e.g. 2025)</h3>
+            <pre><code>-- Level 1: Invoice Types under 2025
+SELECT InvoiceType AS Name,
+       COUNT(*) AS DocumentCount,
+       '2025/' + InvoiceType AS Path
+FROM dms.ezca_156_items
+WHERE IsDeleted = 0 AND RepositoryId = @RepoId AND Year = 2025
+GROUP BY InvoiceType
+ORDER BY InvoiceType;</code></pre>
+
+            <h3>C. Children of Year/InvoiceType (e.g. 2025/Purchase)</h3>
+            <pre><code>-- Level 2: Vendors under 2025/Purchase
+SELECT VendorName AS Name,
+       COUNT(*) AS DocumentCount,
+       '2025/Purchase/' + VendorName AS Path
+FROM dms.ezca_156_items
+WHERE IsDeleted = 0 
+  AND RepositoryId = @RepoId 
+  AND Year = 2025 AND InvoiceType = 'Purchase'
+GROUP BY VendorName
+ORDER BY VendorName;</code></pre>
+
+            <h3>D. Documents in selected folder</h3>
+            <pre><code>-- User selected: 2025 / Purchase / Acme Corp
+SELECT Id, FileName, Status, CreatedAt, WorkflowInstanceId, ...
+FROM dms.ezca_156_items
+WHERE IsDeleted = 0 
+  AND RepositoryId = @RepoId
+  AND Year = 2025 AND InvoiceType = 'Purchase' AND VendorName = 'Acme Corp'
+ORDER BY CreatedAt DESC
+OFFSET @Skip ROWS FETCH NEXT @PageSize ROWS ONLY;</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>5. Indexing for Folder Queries</h2>
+            <pre><code>-- Composite index for folder drill-down and document listing
+CREATE NONCLUSTERED INDEX IX_ezca_156_items_FolderStructure 
+ON dms.ezca_156_items (RepositoryId, IsDeleted, Year, InvoiceType, VendorName)
+INCLUDE (Id, FileName, Status, CreatedAt, WorkflowInstanceId);
+
+-- Filtered index for active documents
+CREATE NONCLUSTERED INDEX IX_ezca_156_items_Folder_Active 
+ON dms.ezca_156_items (RepositoryId, Year, InvoiceType, VendorName)
+WHERE IsDeleted = 0;</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>6. Folder Hierarchy Maintenance</h2>
+            <div class="plain-box">
+                <strong>Simple choice:</strong><br>
+                • <strong>Real-time:</strong> Count on each request. Always correct. Slower with lots of docs.<br>
+                • <strong>FolderHierarchy:</strong> Pre-calculate counts. Fast tree. Need to update when docs change (trigger or job).
+            </div>
+            <table>
+                <thead><tr><th>Option</th><th>Pros</th><th>Cons</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>A. Real-time</strong></td><td>Always correct, no sync</td><td>Slower with many docs</td></tr>
+                    <tr><td><strong>B. FolderHierarchy</strong></td><td>Fast tree</td><td>Must keep in sync when docs change</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>7. API Shape for UI</h2>
+            <table>
+                <thead><tr><th>API</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>GET /api/repositories/{repoId}/folders/children?path=</td><td>Root level (list Years)</td></tr>
+                    <tr><td>GET /api/repositories/{repoId}/folders/children?path=2025/Purchase</td><td>Children of folder (e.g. Vendors)</td></tr>
+                    <tr><td>GET /api/repositories/{repoId}/documents?path=2025/Purchase/Acme%20Corp&page=1&pageSize=50</td><td>Documents in folder</td></tr>
+                </tbody>
+            </table>
+            <h3>Response example: Get folder children</h3>
+            <pre><code>{
+  "path": "2025/Purchase",
+  "children": [
+    { "name": "Acme Corp", "path": "2025/Purchase/Acme Corp", "documentCount": 42 },
+    { "name": "Beta Inc", "path": "2025/Purchase/Beta Inc", "documentCount": 18 }
+  ]
+}</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>8. Path Parsing and Validation</h2>
+            <div class="plain-box">
+                <strong>How paths map to queries:</strong> Empty = root (show years). "2025" = show types under 2025. "2025/Purchase" = show vendors. "2025/Purchase/Acme Corp" = show documents.
+            </div>
+            <table>
+                <thead><tr><th>Path</th><th>Meaning</th></tr></thead>
+                <tbody>
+                    <tr><td>""</td><td>Root (list Years)</td></tr>
+                    <tr><td>2025</td><td>Year=2025 (list InvoiceTypes)</td></tr>
+                    <tr><td>2025/Purchase</td><td>Year=2025, InvoiceType='Purchase' (list Vendors)</td></tr>
+                    <tr><td>2025/Purchase/Acme Corp</td><td>Full path → list documents</td></tr>
+                </tbody>
+            </table>
+            <pre><code>// Parse path on server
+var parts = path.Split('/');
+int? year = parts.Length > 0 && int.TryParse(parts[0], out var y) ? y : null;
+string invoiceType = parts.Length > 1 ? parts[1] : null;
+string vendorName = parts.Length > 2 ? parts[2] : null;</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>9. Schema Summary</h2>
+            <div class="flow-diagram">ezca_156_items
+├── Year           SMALLINT NOT NULL      -- Folder level 0
+├── InvoiceType    NVARCHAR(64) NOT NULL  -- Folder level 1
+├── VendorName     NVARCHAR(256) NOT NULL -- Folder level 2
+├── FileName       NVARCHAR(512) NOT NULL -- Leaf (document name)
+├── FolderPath     AS (Year + '/' + InvoiceType + '/' + VendorName) PERSISTED
+└── ... (other columns)
+
+Index: (RepositoryId, IsDeleted, Year, InvoiceType, VendorName)</div>
+        </div>
+
+        <div class="section">
+            <h2>10. Configurable Folder Structure</h2>
+            <p>If folder levels vary by repository, use <code>dms.RepositoryFolderConfig</code>:</p>
+            <table>
+                <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>RepositoryId</td><td>UNIQUEIDENTIFIER</td><td>Repository</td></tr>
+                    <tr><td>LevelOrder</td><td>TINYINT</td><td>0, 1, 2, 3</td></tr>
+                    <tr><td>FieldName</td><td>NVARCHAR(64)</td><td>Year, InvoiceType, VendorName</td></tr>
+                    <tr><td>DisplayName</td><td>NVARCHAR(128)</td><td>UI label</td></tr>
+                </tbody>
+            </table>
+            <pre><code>CREATE TABLE dms.RepositoryFolderConfig (
+    RepositoryId UNIQUEIDENTIFIER NOT NULL,
+    LevelOrder TINYINT NOT NULL,
+    FieldName NVARCHAR(64) NOT NULL,
+    DisplayName NVARCHAR(128) NOT NULL,
+    PRIMARY KEY (RepositoryId, LevelOrder)
+);</code></pre>
+            <p>Build dynamic queries from this config. For a fixed structure, physical columns are simpler and faster.</p>
+        </div>
+
+        <div class="section">
+            <h2>11. UI Flow</h2>
+            <div class="flow-diagram">┌─────────────────────────────────────────────────────────────────┐
+│ File Explorer                                                    │
+├──────────────────┬──────────────────────────────────────────────┤
+│ 📁 2025 (1,234)  │  Documents in 2025/Purchase/Acme Corp        │
+│   📁 Purchase    │  ┌─────────────────────────────────────────┐│
+│     📁 Acme Corp │  │ INV-001.pdf  │ Signed │ 2025-01-15      ││
+│     📁 Beta Inc  │  │ INV-002.pdf  │ Pending│ 2025-01-14      ││
+│   📁 Sales       │  │ ...                                     ││
+│ 📁 2024 (5,678)  │  └─────────────────────────────────────────┘│
+└──────────────────┴──────────────────────────────────────────────┘
+
+Tree: GET /folders/children?path=2025/Purchase
+Grid: GET /documents?path=2025/Purchase/Acme%20Corp</div>
+        </div>
+
+        <div class="section">
+            <h2>12. Summary</h2>
+            <table>
+                <thead><tr><th>Aspect</th><th>Approach</th></tr></thead>
+                <tbody>
+                    <tr><td>Storage</td><td>Physical columns: Year, InvoiceType, VendorName, FileName</td></tr>
+                    <tr><td>Path</td><td>Persisted computed FolderPath or build from columns</td></tr>
+                    <tr><td>Tree + counts</td><td>GROUP BY on folder levels, or materialized FolderHierarchy</td></tr>
+                    <tr><td>Document list</td><td>Filter by Year, InvoiceType, VendorName</td></tr>
+                    <tr><td>Index</td><td>Composite on (RepositoryId, IsDeleted, Year, InvoiceType, VendorName)</td></tr>
+                    <tr><td>API</td><td>/folders/children?path=... and /documents?path=...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            <p>ezofisAPI · DMS Repository Tables Design</p>
+            <p><a href="index.html">← API Docs</a> · <a href="workflow-tables.html">Workflow Tables</a></p>
+        </footer>
+    </div>
+</body>
+</html>
