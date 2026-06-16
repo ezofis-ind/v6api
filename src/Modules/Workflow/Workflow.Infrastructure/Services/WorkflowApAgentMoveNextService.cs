@@ -38,11 +38,6 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
             ["TERMS"] = "Terms",
         };
 
-    private static readonly string[] LineItemControlHints =
-    [
-        "lineitem", "lineitems", "invoiceline", "invoiceextracted", "extractedline", "invoice_line", "line item"
-    ];
-
     private readonly ITenantContext _tenantContext;
     private readonly IWorkflowTableCreator _tableCreator;
     private readonly IRepositoryItemQueryService _repositoryItems;
@@ -159,13 +154,14 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
         string formId,
         int formEntryId,
         IReadOnlyDictionary<string, string> fields,
+        string? lineItemsJson = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(formId))
             throw new ArgumentException("formId is required.");
         if (formEntryId <= 0)
             throw new ArgumentException("formEntryId must be a positive integer.");
-        if (fields.Count == 0)
+        if (fields.Count == 0 && string.IsNullOrWhiteSpace(lineItemsJson))
             return 0;
 
         var connectionString = _tenantContext.ConnectionString;
@@ -195,8 +191,10 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
                 continue;
 
             string? column = null;
+            FormControlRow? matchedControl = null;
             if (TryResolveControlForField(key, controls, out var control) && control is not null)
             {
+                matchedControl = control;
                 if (!TryResolveEzfbColumn(control.JsonId, ezfbColumns, out var colFromControl))
                 {
                     _logger.LogWarning(
@@ -218,9 +216,24 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
                 column = colFromKey;
             }
 
+            var valueToWrite = value;
+            if (IsJsonArrayValue(value)
+                && matchedControl is not null
+                && IsLineItemControl(matchedControl))
+            {
+                valueToWrite = NormalizeLineItemsJson(value);
+            }
+            else if (IsJsonArrayValue(value) && matchedControl is null)
+            {
+                _logger.LogDebug(
+                    "Skipping array formData key {FieldKey}: no matching wFormControl for DYNAMIC_TABLE.",
+                    key);
+                continue;
+            }
+
             try
             {
-                await UpdateEzfbColumnAsync(connection, ezfbTable, formEntryId, column, value, cancellationToken);
+                await UpdateEzfbColumnAsync(connection, ezfbTable, formEntryId, column, valueToWrite, cancellationToken);
                 updated++;
             }
             catch (Exception ex)
@@ -234,8 +247,74 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(lineItemsJson) && ezfbColumns.Count > 0)
+        {
+            var lineItemsColumn = ResolveLineItemsEzfbColumn(controls, ezfbColumns);
+            if (lineItemsColumn != null)
+            {
+                try
+                {
+                    await UpdateEzfbColumnAsync(
+                        connection,
+                        ezfbTable,
+                        formEntryId,
+                        lineItemsColumn,
+                        NormalizeLineItemsJson(lineItemsJson),
+                        cancellationToken);
+                    updated++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "ezfb line items update failed for formEntryId {FormEntryId}, column {Column}",
+                        formEntryId,
+                        lineItemsColumn);
+                }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "No ezfb DYNAMIC_TABLE / line-item column resolved for form {FormId}.",
+                    formId);
+            }
+        }
+
         return updated;
     }
+
+    private static bool IsJsonArrayValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var trimmed = value.Trim();
+        return trimmed.StartsWith("[", StringComparison.Ordinal)
+            && trimmed.EndsWith("]", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeLineItemsJson(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.StartsWith("[", StringComparison.Ordinal)
+            ? trimmed
+            : value;
+    }
+
+    private static bool IsLineItemControl(FormControlRow control) =>
+        IsInvoiceExtractedLineItemControl(control);
+
+    private static bool IsInvoiceExtractedLineItemControl(FormControlRow control)
+    {
+        if (!IsDynamicTableControl(control))
+            return false;
+
+        return ApAgentMetadataParser.IsLineItemSectionName(control.Name ?? string.Empty);
+    }
+
+    private static bool IsDynamicTableControl(FormControlRow control) =>
+        !string.IsNullOrWhiteSpace(control.Type)
+        && control.Type.Contains("DYNAMIC_TABLE", StringComparison.OrdinalIgnoreCase);
 
     private async Task<ApAgentMetadataApplyResult> ApplyMetadataCoreAsync(
         Guid tenantId,
@@ -666,50 +745,44 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
         return false;
     }
 
+    /// <summary>
+    /// Resolves ezfb column for AP-agent / metadata invoice line items.
+    /// Targets <c>DYNAMIC_TABLE</c> controls such as "Invoice Extracted Line Item" (not PO TABLE controls).
+    /// </summary>
     private static string? ResolveLineItemsEzfbColumn(
         IReadOnlyList<FormControlRow> controls,
         IReadOnlySet<string> ezfbColumns)
     {
         foreach (var row in controls)
         {
-            if (string.IsNullOrWhiteSpace(row.Name))
-                continue;
-
-            var name = row.Name.Trim();
-            if (ApAgentMetadataParser.IsLineItemSectionName(name) || MatchesLineItemHint(name))
-            {
-                if (TryResolveEzfbColumn(row.JsonId, ezfbColumns, out var exactCol))
-                    return exactCol;
-            }
-        }
-
-        foreach (var row in controls)
-        {
-            if (!MatchesLineItemHint(row.JsonId) && !MatchesLineItemHint(row.Name) && !MatchesLineItemHint(row.Type))
+            if (!IsInvoiceExtractedLineItemControl(row))
                 continue;
 
             if (TryResolveEzfbColumn(row.JsonId, ezfbColumns, out var col))
                 return col;
         }
 
-        foreach (var col in ezfbColumns)
+        FormControlRow? onlyDynamic = null;
+        var dynamicCount = 0;
+        foreach (var row in controls)
         {
-            if (MatchesLineItemHint(col))
-                return col;
+            if (!IsDynamicTableControl(row))
+                continue;
+
+            dynamicCount++;
+            onlyDynamic = row;
+            if (dynamicCount > 1)
+                break;
+        }
+
+        if (dynamicCount == 1
+            && onlyDynamic is not null
+            && TryResolveEzfbColumn(onlyDynamic.JsonId, ezfbColumns, out var singleCol))
+        {
+            return singleCol;
         }
 
         return null;
-    }
-
-    private static bool MatchesLineItemHint(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-
-        var normalized = value.Replace("_", "", StringComparison.Ordinal)
-            .Replace("-", "", StringComparison.Ordinal)
-            .ToLowerInvariant();
-        return LineItemControlHints.Any(h => normalized.Contains(h, StringComparison.Ordinal));
     }
 
     private static Dictionary<string, string> BuildRepositoryMetadataFields(

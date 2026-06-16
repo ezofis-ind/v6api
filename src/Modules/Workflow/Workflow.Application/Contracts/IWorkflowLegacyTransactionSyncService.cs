@@ -17,6 +17,7 @@ public interface IWorkflowLegacyTransactionSyncService
         Guid userId,
         Guid? activityUserId,
         string? review,
+        MailboxFormSnapshot? mailboxForm = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

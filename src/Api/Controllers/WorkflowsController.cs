@@ -1292,7 +1292,12 @@ public sealed class WorkflowsController : ControllerBase
     {
         var apAgent = request.ToApAgentPayload(instanceId);
         var (formId, formEntryId) = request.ResolveFormIdentity();
-        var formDataFields = MoveToNextStepFormDataParser.ParseFieldValues(request.FormData);
+        var parsedFormData = MoveToNextStepFormDataParser.Parse(request.FormData);
+        var submittedFormDataJson = request.FormData.HasValue
+            ? request.FormData.Value.ValueKind == JsonValueKind.String
+                ? request.FormData.Value.GetString()
+                : request.FormData.Value.GetRawText()
+            : null;
         var command = new MoveToNextStepCommand(
             instanceId,
             request.ActivityId,
@@ -1302,7 +1307,9 @@ public sealed class WorkflowsController : ControllerBase
             apAgent,
             formId,
             formEntryId,
-            formDataFields);
+            parsedFormData.Fields,
+            parsedFormData.LineItemsJson,
+            submittedFormDataJson);
         var result = await _mediator.Send(command, cancellationToken);
         return Ok(result);
     }

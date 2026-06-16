@@ -61,6 +61,7 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IWorkflowJsonStorageService, WorkflowJsonStorageService>();
         services.AddScoped<IFormJsonStorageService, FormJsonStorageService>();
         services.AddScoped<IFormService, FormService>();
+        services.AddScoped<IFormEntryService, FormEntryService>();
         services.AddScoped<IConnectorService, ConnectorService>();
         services.AddScoped<IWorkflowSecurityService, WorkflowSecurityService>();
         services.AddScoped<IWorkflowInitiationService, WorkflowInitiationService>();

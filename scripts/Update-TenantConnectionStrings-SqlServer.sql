@@ -4,8 +4,8 @@
 
 -- Example: old instance -> new instance (edit names to match your environment)
 UPDATE catalog.Tenants
-SET ConnectionString = REPLACE(ConnectionString, N'EZOFISNEW\SQLEXPRESS01', N'EZ001\SQLEXPRESS')
-WHERE ConnectionString LIKE N'%EZOFISNEW\SQLEXPRESS01%';
+SET ConnectionString = REPLACE(ConnectionString, N'EZ001\SQLEXPRESS', N'EZOFISNEW\SQLEXPRESS01')
+WHERE ConnectionString LIKE N'%EZ001\SQLEXPRESS%';
 
 -- Verify
 SELECT Id, Name, LEFT(ConnectionString, 120) AS ConnectionStringPreview

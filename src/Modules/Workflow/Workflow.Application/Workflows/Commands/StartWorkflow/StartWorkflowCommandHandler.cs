@@ -117,6 +117,7 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
                 userId,
                 firstDefinitionStep.AssignedToUserId ?? userId,
                 review: null,
+                mailboxForm: null,
                 cancellationToken);
 
             firstTransactionId = sync.CurrentTransactionId;

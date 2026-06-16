@@ -137,11 +137,17 @@ public static class ApAgentMetadataParser
             return true;
 
         var normalized = NormalizeName(name);
+        if (normalized.Contains("polineitem", StringComparison.Ordinal)
+            && !normalized.Contains("invoiceextracted", StringComparison.Ordinal))
+            return false;
+
         if (normalized is "lineitem" or "lineitems")
             return true;
 
         if (normalized.Contains("lineitems", StringComparison.Ordinal)
-            && !normalized.Contains("invoiceheader", StringComparison.Ordinal))
+            && !normalized.Contains("invoiceheader", StringComparison.Ordinal)
+            && !normalized.Contains("poline", StringComparison.Ordinal)
+            && !normalized.StartsWith("po", StringComparison.Ordinal))
             return true;
 
         return normalized.Contains("invoiceextracted", StringComparison.Ordinal)

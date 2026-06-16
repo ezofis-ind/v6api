@@ -17,4 +17,11 @@ public interface IWorkflowLegacyMailboxSyncService
         Guid workflowId,
         Guid workflowInstanceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Updates formId, formEntryId, and formData on all Inbox/Sent/Completed rows for a workflow instance.</summary>
+    Task PropagateInstanceFormDataAsync(
+        Guid workflowId,
+        Guid workflowInstanceId,
+        MailboxFormSnapshot formData,
+        CancellationToken cancellationToken = default);
 }

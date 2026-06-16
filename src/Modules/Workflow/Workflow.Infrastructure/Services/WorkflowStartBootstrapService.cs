@@ -78,6 +78,7 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
             userId,
             startStep.AssignedToUserId ?? userId,
             WorkflowStepTransitionHelper.StartProceedReview,
+            mailboxForm: null,
             cancellationToken);
 
         if (reviewSync.Status is LegacyTransactionSyncStatus.ReviewUpdated
