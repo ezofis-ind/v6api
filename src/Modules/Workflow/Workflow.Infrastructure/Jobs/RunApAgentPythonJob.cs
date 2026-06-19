@@ -67,17 +67,8 @@ public sealed class RunApAgentPythonJob
             await services.GetRequiredService<IApAgentPythonPipelineService>()
                 .ExecuteAsync(args, jobId);
 
-            await progress.SetHangfireStateAsync(
-                jobId,
-                "Succeeded",
-                "AP Agent finished successfully");
-            await progress.UpdateProgressAsync(
-                jobId,
-                new ApAgentJobProgressUpdate("COMPLETED", "AP Agent finished", 100),
-                default);
-
             _logger.LogInformation(
-                "AP Agent Python job {JobId} completed for instance {InstanceId}",
+                "AP Agent Python job {JobId} POST finished for instance {InstanceId}; awaiting COMPLETED/FAILED from Python.",
                 jobId,
                 args.InstanceId);
         }

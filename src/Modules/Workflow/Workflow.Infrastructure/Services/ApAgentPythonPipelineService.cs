@@ -50,10 +50,9 @@ public sealed class ApAgentPythonPipelineService : IApAgentPythonPipelineService
 
         if (string.IsNullOrWhiteSpace(options.PythonServiceUrl))
         {
-            _logger.LogWarning(
-                "ApAgent:PythonServiceUrl is not configured; skipping Python call for instance {InstanceId}.",
-                args.InstanceId);
-            return;
+            throw new InvalidOperationException(
+                "ApAgent:PythonServiceUrl is not configured. Add it to appsettings.json " +
+                "(e.g. \"ApAgent\": { \"PythonServiceUrl\": \"http://localhost:8001/api/ap-agent/run\" }).");
         }
 
         var connectionString = await _connectionStringResolver.GetConnectionStringAsync(args.TenantId, cancellationToken);

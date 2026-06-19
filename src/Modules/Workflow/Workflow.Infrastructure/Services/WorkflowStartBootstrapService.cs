@@ -78,6 +78,7 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
             userId,
             startStep.AssignedToUserId ?? userId,
             WorkflowStepTransitionHelper.StartProceedReview,
+            mailboxForm: null,
             cancellationToken);
 
         if (reviewSync.Status is LegacyTransactionSyncStatus.ReviewUpdated
@@ -653,7 +654,11 @@ VALUES
         var connectionString = _configuration["WorkflowJsonStorage:Blob:ConnectionString"]
             ?? _configuration["WorkflowJsonStorage:ConnectionString"];
         if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            _logger.LogWarning(
+                "WorkflowJsonStorage blob connection string is not configured; start payload JSON was not saved to blob (Ap Agent Trial/*.json).");
             return null;
+        }
 
         var containerPrefix = (_configuration["WorkflowJsonStorage:Blob:ContainerPrefix"] ?? "ezts").ToLowerInvariant();
         var containerName = $"{containerPrefix}{tenantId:N}";

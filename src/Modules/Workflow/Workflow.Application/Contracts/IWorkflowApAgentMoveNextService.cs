@@ -40,10 +40,11 @@ public interface IWorkflowApAgentMoveNextService
         Guid? userId,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Apply move-next formData jsonId map to dbo.ezfb_{form}_items row.</summary>
+    /// <summary>Apply move-next formData jsonId map to dbo.ezfb_{form}_items row (incl. DYNAMIC_TABLE line items).</summary>
     Task<int> ApplyFormDataToEzfbAsync(
         string formId,
         int formEntryId,
         IReadOnlyDictionary<string, string> fields,
+        string? lineItemsJson = null,
         CancellationToken cancellationToken = default);
 }

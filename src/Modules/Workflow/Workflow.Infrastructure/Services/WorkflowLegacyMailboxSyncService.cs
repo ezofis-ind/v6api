@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.SqlClient;
 
 using Microsoft.Extensions.Logging;
@@ -72,7 +73,7 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
 
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-        await SyncTransactionRowAsync(workflowId, transactionRowId, connection, cancellationToken);
+        await SyncTransactionRowAsync(workflowId, transactionRowId, connection, formOverride: null, cancellationToken);
     }
 
     public async Task SyncInstanceEndTransactionsAsync(
@@ -86,7 +87,7 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
 
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-        await SyncInstanceEndTransactionsAsync(workflowId, workflowInstanceId, connection, cancellationToken);
+        await SyncInstanceEndTransactionsAsync(workflowId, workflowInstanceId, connection, formOverride: null, cancellationToken);
     }
 
     /// <summary>Sync using an existing open connection (same request/transaction).</summary>
@@ -97,6 +98,8 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
         int transactionRowId,
 
         SqlConnection connection,
+
+        MailboxFormSnapshot? formOverride = null,
 
         CancellationToken cancellationToken = default)
 
@@ -110,7 +113,7 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
 
 
 
-        await SyncTransactionRowCoreAsync(workflowId, transactionRowId, connection, cancellationToken);
+        await SyncTransactionRowCoreAsync(workflowId, transactionRowId, connection, formOverride, cancellationToken);
 
     }
 
@@ -123,6 +126,8 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
         Guid workflowInstanceId,
 
         SqlConnection connection,
+
+        MailboxFormSnapshot? formOverride = null,
 
         CancellationToken cancellationToken = default)
 
@@ -140,7 +145,7 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
 
         var transactionTable = $"workflow.[transaction_{suffix}]";
 
-        await SyncInstanceEndTransactionsCoreAsync(workflowId, workflowInstanceId, transactionTable, connection, cancellationToken);
+        await SyncInstanceEndTransactionsCoreAsync(workflowId, workflowInstanceId, transactionTable, connection, formOverride, cancellationToken);
 
     }
 
@@ -155,6 +160,8 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
         string transactionTable,
 
         SqlConnection connection,
+
+        MailboxFormSnapshot? formOverride,
 
         CancellationToken cancellationToken)
 
@@ -190,7 +197,7 @@ WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0 AND UPPER(LTRIM
 
         foreach (var id in ids)
 
-            await SyncTransactionRowCoreAsync(workflowId, id, connection, cancellationToken);
+            await SyncTransactionRowCoreAsync(workflowId, id, connection, formOverride, cancellationToken);
 
     }
 
@@ -203,6 +210,8 @@ WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0 AND UPPER(LTRIM
         int transactionRowId,
 
         SqlConnection connection,
+
+        MailboxFormSnapshot? formOverride,
 
         CancellationToken cancellationToken)
 
@@ -341,6 +350,7 @@ WHERE t.Id = @TransactionRowId;";
             suffix,
             workflowId,
             workflowInstanceId,
+            formOverride,
             cancellationToken);
 
 
@@ -576,6 +586,7 @@ DELETE FROM {completedTable} WHERE {keyPredicate};";
         string suffix,
         Guid workflowId,
         Guid workflowInstanceId,
+        MailboxFormSnapshot? formOverride,
         CancellationToken cancellationToken)
     {
         var attachmentTable = $"workflow.[WorkflowAttachments_{suffix}]";
@@ -633,7 +644,19 @@ ORDER BY Id DESC;";
         if (string.IsNullOrWhiteSpace(formId))
             formId = await ResolveWorkflowFormIdAsync(connection, workflowId, cancellationToken);
 
-        if (!string.IsNullOrWhiteSpace(formId) && !string.IsNullOrWhiteSpace(formEntryId)
+        if (formOverride != null)
+        {
+            if (!string.IsNullOrWhiteSpace(formOverride.FormId))
+                formId = formOverride.FormId.Trim();
+            if (formOverride.FormEntryId is > 0)
+                formEntryId = formOverride.FormEntryId.Value.ToString(CultureInfo.InvariantCulture);
+            if (!string.IsNullOrWhiteSpace(formOverride.FormDataJson))
+                formData = formOverride.FormDataJson;
+        }
+
+        if (string.IsNullOrWhiteSpace(formData)
+            && !string.IsNullOrWhiteSpace(formId)
+            && !string.IsNullOrWhiteSpace(formEntryId)
             && int.TryParse(formEntryId, out var entryId))
         {
             formData = await WorkflowEzfbFormDataLoader.LoadFormDataJsonAsync(
@@ -673,6 +696,74 @@ WHERE Id = @WorkflowId AND IsDeleted = 0;
         cmd.Parameters.AddWithValue("@WorkflowId", workflowId);
         var value = await cmd.ExecuteScalarAsync(cancellationToken);
         return value == null || value == DBNull.Value ? null : Convert.ToString(value)?.Trim();
+    }
+
+    public async Task PropagateInstanceFormDataAsync(
+        Guid workflowId,
+        Guid workflowInstanceId,
+        MailboxFormSnapshot formData,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(formData.FormId) || formData.FormEntryId is not > 0)
+            return;
+
+        var connectionString = _tenantContext.ConnectionString;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return;
+
+        await _tableCreator.EnsureLegacyMailboxTablesAsync(workflowId, connectionString, cancellationToken);
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var suffix = workflowId.ToString("N")[..8];
+        var workflowIdValue = workflowId.ToString("D");
+        var workflowIdCompact = workflowId.ToString("N");
+        var instanceStr = workflowInstanceId.ToString("D");
+
+        var formId = formData.FormId.Trim();
+        var formEntryId = formData.FormEntryId.Value.ToString(CultureInfo.InvariantCulture);
+        var formDataJson = formData.FormDataJson;
+
+        if (string.IsNullOrWhiteSpace(formDataJson))
+        {
+            formDataJson = await WorkflowEzfbFormDataLoader.LoadFormDataJsonAsync(
+                connection, formId, formData.FormEntryId.Value, cancellationToken);
+        }
+
+        foreach (var prefix in new[] { "Inbox", "Sent", "Completed" })
+        {
+            var table = MailboxTable(prefix, suffix);
+            var sql = $@"
+UPDATE {table}
+SET formId = @FormId,
+    formEntryId = @FormEntryId,
+    formData = @FormData
+WHERE (workflowId = @WorkflowIdValue OR workflowId = @WorkflowTableKey)
+  AND (
+      workflowInstanceId = @WorkflowInstanceIdStr
+      OR TRY_CONVERT(UNIQUEIDENTIFIER, workflowInstanceId) = @WorkflowInstanceId
+  );";
+
+            await using var cmd = new SqlCommand(sql, connection);
+            cmd.Parameters.AddWithValue("@FormId", formId);
+            cmd.Parameters.AddWithValue("@FormEntryId", formEntryId);
+            cmd.Parameters.AddWithValue("@FormData", (object?)formDataJson ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
+            cmd.Parameters.AddWithValue("@WorkflowTableKey", workflowIdCompact);
+            cmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", instanceStr);
+            cmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+
+            var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+            if (rows > 0)
+            {
+                _logger.LogDebug(
+                    "Propagated formData to {Count} row(s) in {Table} for instance {InstanceId}.",
+                    rows,
+                    table,
+                    workflowInstanceId);
+            }
+        }
     }
 
 }

@@ -20,15 +20,11 @@ public sealed class AddCommentCommandHandler : IRequestHandler<AddCommentCommand
     {
         var userId = _currentUserProvider.GetUserId() ?? throw new InvalidOperationException("User context is required.");
 
-        // Get workflow instance to find workflow ID
         var instance = await _workflowRepository.GetInstanceByIdAsync(request.WorkflowInstanceId, cancellationToken);
-        if (instance == null)
-            throw new InvalidOperationException("Workflow instance not found.");
+        WorkflowInstanceScopeValidator.EnsureInstanceBelongsToWorkflow(instance, request.WorkflowId, request.WorkflowInstanceId);
 
-        // Add comment to workflow-specific table
-        var commentId = Guid.NewGuid();
-        await _dynamicTableRepository.AddCommentAsync(
-            instance.WorkflowId,
+        var commentId = await _dynamicTableRepository.AddCommentAsync(
+            request.WorkflowId,
             request.WorkflowInstanceId,
             request.Comments,
             userId,
@@ -37,8 +33,8 @@ public sealed class AddCommentCommandHandler : IRequestHandler<AddCommentCommand
             request.ShowTo,
             cancellationToken);
 
-        var tableName = _dynamicTableRepository.GetTableName(instance.WorkflowId, "WorkflowComments");
+        var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowComments");
 
-        return new AddCommentCommandResult(commentId, tableName);
+        return new AddCommentCommandResult(commentId, request.WorkflowId, request.WorkflowInstanceId, tableName);
     }
 }

@@ -3,7 +3,8 @@ namespace SaaSApp.Workflow.Application.Contracts;
 public sealed record ApAgentJobProgressUpdate(
     string? Stage = null,
     string? Message = null,
-    int? Percent = null);
+    int? Percent = null,
+    string? FormData = null);
 
 public sealed record ApAgentJobStatusResult(
     string JobId,
@@ -13,6 +14,7 @@ public sealed record ApAgentJobStatusResult(
     string? Stage,
     string? Message,
     int? Percent,
+    string? FormData,
     string? ErrorMessage,
     DateTime? UpdatedAtUtc,
     bool IsTerminal);
@@ -35,6 +37,13 @@ public interface IApAgentJobProgressService
         Guid workflowId,
         Guid instanceId,
         ApAgentJobProgressUpdate update,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads latest job for workflow+instance and stores formData JSON (e.g. after metadata apply).</summary>
+    Task UpdateFormDataByInstanceAsync(
+        Guid workflowId,
+        Guid instanceId,
+        string formDataJson,
         CancellationToken cancellationToken = default);
 
     Task SetHangfireStateAsync(
@@ -61,6 +70,7 @@ public sealed record ApAgentJobProgressRow(
     string? Message,
     int? Percent,
     string? ErrorMessage,
+    string? FormData,
     DateTime UpdatedAtUtc);
 
 public interface IApAgentJobStatusService

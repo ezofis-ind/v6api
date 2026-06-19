@@ -11,7 +11,9 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
     private readonly IWorkflowRepository _repository;
     private readonly IDynamicTableRepository _dynamicTableRepository;
     private readonly IWorkflowLegacyTransactionSyncService _legacyTransactionSync;
+    private readonly IWorkflowLegacyMailboxSyncService _mailboxSync;
     private readonly IWorkflowApAgentMoveNextService _apAgentMoveNext;
+    private readonly IWorkflowEzfbFormDataLoader _ezfbFormDataLoader;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICurrentUserProvider _currentUserProvider;
 
@@ -19,14 +21,18 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
         IWorkflowRepository repository,
         IDynamicTableRepository dynamicTableRepository,
         IWorkflowLegacyTransactionSyncService legacyTransactionSync,
+        IWorkflowLegacyMailboxSyncService mailboxSync,
         IWorkflowApAgentMoveNextService apAgentMoveNext,
+        IWorkflowEzfbFormDataLoader ezfbFormDataLoader,
         IUnitOfWork unitOfWork,
         ICurrentUserProvider currentUserProvider)
     {
         _repository = repository;
         _dynamicTableRepository = dynamicTableRepository;
         _legacyTransactionSync = legacyTransactionSync;
+        _mailboxSync = mailboxSync;
         _apAgentMoveNext = apAgentMoveNext;
+        _ezfbFormDataLoader = ezfbFormDataLoader;
         _unitOfWork = unitOfWork;
         _currentUserProvider = currentUserProvider;
     }
@@ -64,14 +70,18 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
         if (instance.Status == WorkflowInstanceStatus.Cancelled)
             throw new InvalidOperationException("Workflow is cancelled.");
 
+        var lineItemsJson = request.FormLineItemsJson;
+
         if (!string.IsNullOrWhiteSpace(request.FormId)
             && request.FormEntryId is > 0
-            && request.FormDataFields is { Count: > 0 })
+            && ((request.FormDataFields is { Count: > 0 })
+                || !string.IsNullOrWhiteSpace(lineItemsJson)))
         {
             await _apAgentMoveNext.ApplyFormDataToEzfbAsync(
                 request.FormId,
                 request.FormEntryId.Value,
-                request.FormDataFields,
+                request.FormDataFields ?? new Dictionary<string, string>(),
+                lineItemsJson,
                 cancellationToken);
         }
 
@@ -146,6 +156,8 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
                     $"AP agent step is not active (status: {apStepInstance.Status}).");
         }
 
+        var mailboxForm = await BuildMailboxFormSnapshotAsync(request, cancellationToken);
+
         var legacySync = await _legacyTransactionSync.SyncTransactionByActivityIdAsync(
             instance.WorkflowId,
             instance.Id,
@@ -156,6 +168,7 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
             userId,
             request.ActivityUserId,
             request.Review,
+            mailboxForm,
             cancellationToken);
 
         WorkflowStep? nextDefinitionStep = null;
@@ -238,6 +251,8 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
         int? legacyNextTransactionId = isCompleted ? 0 : legacySync.NextTransactionId;
         Guid? legacyNextTransactionGuid = isCompleted ? null : legacySync.NextTransactionGuid;
 
+        await PropagateMailboxFormDataAsync(request, instance, cancellationToken);
+
         return new MoveToNextStepCommandResult(
             true,
             message,
@@ -259,6 +274,56 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
              string.Equals(s.ActivityId, id, StringComparison.OrdinalIgnoreCase))
             || string.Equals(s.Id.ToString("D"), id, StringComparison.OrdinalIgnoreCase)
             || string.Equals(s.Id.ToString("N"), id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasUserFormData(MoveToNextStepCommand request) =>
+        !string.IsNullOrWhiteSpace(request.SubmittedFormDataJson)
+        || request.FormDataFields is { Count: > 0 }
+        || !string.IsNullOrWhiteSpace(request.FormLineItemsJson);
+
+    private async Task<MailboxFormSnapshot?> BuildMailboxFormSnapshotAsync(
+        MoveToNextStepCommand request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.FormId) || request.FormEntryId is not > 0)
+            return null;
+
+        string? formDataJson;
+        if (HasUserFormData(request))
+        {
+            formDataJson = MoveToNextStepFormDataComposer.ForMailbox(request.SubmittedFormDataJson)
+                ?? MoveToNextStepFormDataComposer.FromParsedFields(
+                    request.FormDataFields,
+                    request.FormLineItemsJson);
+        }
+        else
+        {
+            formDataJson = await _ezfbFormDataLoader.LoadFormDataJsonAsync(
+                request.FormId,
+                request.FormEntryId.Value,
+                cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(formDataJson))
+            return null;
+
+        return new MailboxFormSnapshot(request.FormId, request.FormEntryId, formDataJson);
+    }
+
+    private async Task PropagateMailboxFormDataAsync(
+        MoveToNextStepCommand request,
+        WorkflowInstance instance,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = await BuildMailboxFormSnapshotAsync(request, cancellationToken);
+        if (snapshot == null)
+            return;
+
+        await _mailboxSync.PropagateInstanceFormDataAsync(
+            instance.WorkflowId,
+            instance.Id,
+            snapshot,
+            cancellationToken);
     }
 
 }

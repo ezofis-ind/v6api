@@ -24,12 +24,15 @@ public sealed class ApAgentJobStatusService : IApAgentJobStatusService
             return null;
 
         var row = await _progress.GetByJobIdAsync(jobId.Trim(), cancellationToken);
-        var hangfireState = ResolveHangfireState(jobId.Trim()) ?? row?.HangfireState ?? "Unknown";
+        // DB state drives UI: Hangfire marks Succeeded when POST returns; Python PATCH sets terminal state.
+        var hangfireState = row?.HangfireState ?? ResolveHangfireState(jobId.Trim()) ?? "Unknown";
 
         if (row == null && hangfireState == "Unknown")
             return null;
 
-        var isTerminal = TerminalStates.Contains(hangfireState);
+        var isTerminal = TerminalStates.Contains(hangfireState)
+            || string.Equals(row?.Stage, "COMPLETED", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(row?.Stage, "FAILED", StringComparison.OrdinalIgnoreCase);
         var errorMessage = row?.ErrorMessage;
         if (string.Equals(hangfireState, "Failed", StringComparison.OrdinalIgnoreCase)
             && string.IsNullOrWhiteSpace(errorMessage))
@@ -45,6 +48,7 @@ public sealed class ApAgentJobStatusService : IApAgentJobStatusService
             row?.Stage,
             row?.Message,
             row?.Percent,
+            row?.FormData,
             errorMessage,
             row?.UpdatedAtUtc,
             isTerminal);

@@ -77,6 +77,7 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
         Guid userId,
         Guid? activityUserId,
         string? review,
+        MailboxFormSnapshot? mailboxForm = null,
         CancellationToken cancellationToken = default)
     {
         var connectionString = _tenantContext.ConnectionString;
@@ -146,7 +147,7 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
                 cancellationToken);
 
             await _mailboxSync.SyncTransactionRowAsync(
-                workflowId, existingRow.Id, connection, cancellationToken);
+                workflowId, existingRow.Id, connection, mailboxForm, cancellationToken);
 
             int? nextTransactionId = null;
             Guid? nextTransactionGuid = null;
@@ -156,7 +157,7 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
             {
                 await CompleteWorkflowInstanceAsync(connection, instancesTable, workflowInstanceId, userId, cancellationToken);
                 await _mailboxSync.SyncInstanceEndTransactionsAsync(
-                    workflowId, workflowInstanceId, connection, cancellationToken);
+                    workflowId, workflowInstanceId, connection, mailboxForm, cancellationToken);
 
                 return new WorkflowLegacyTransactionSyncResult(
                     LegacyTransactionSyncStatus.ReviewUpdated,
@@ -221,13 +222,13 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
                         cancellationToken);
 
                     await _mailboxSync.SyncTransactionRowAsync(
-                        workflowId, nextTransactionId.Value, connection, cancellationToken);
+                        workflowId, nextTransactionId.Value, connection, mailboxForm, cancellationToken);
 
                     if (IsEndStage(nextStep))
                     {
                         await CompleteWorkflowInstanceAsync(connection, instancesTable, workflowInstanceId, userId, cancellationToken);
                         await _mailboxSync.SyncInstanceEndTransactionsAsync(
-                            workflowId, workflowInstanceId, connection, cancellationToken);
+                            workflowId, workflowInstanceId, connection, mailboxForm, cancellationToken);
                         workflowCompleted = true;
                     }
 
@@ -240,7 +241,7 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
             {
                 await CompleteWorkflowInstanceAsync(connection, instancesTable, workflowInstanceId, userId, cancellationToken);
                 await _mailboxSync.SyncInstanceEndTransactionsAsync(
-                    workflowId, workflowInstanceId, connection, cancellationToken);
+                    workflowId, workflowInstanceId, connection, mailboxForm, cancellationToken);
                 workflowCompleted = true;
             }
 
@@ -283,14 +284,14 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
             cancellationToken);
 
         await _mailboxSync.SyncTransactionRowAsync(
-            workflowId, insertedId, connection, cancellationToken);
+            workflowId, insertedId, connection, mailboxForm, cancellationToken);
 
         var insertedEndStage = IsEndStage(targetStep);
         if (insertedEndStage)
         {
             await CompleteWorkflowInstanceAsync(connection, instancesTable, workflowInstanceId, userId, cancellationToken);
             await _mailboxSync.SyncInstanceEndTransactionsAsync(
-                workflowId, workflowInstanceId, connection, cancellationToken);
+                workflowId, workflowInstanceId, connection, mailboxForm, cancellationToken);
             _logger.LogInformation(
                 "END stage inserted for workflow instance {WorkflowInstanceId}; instance marked completed",
                 workflowInstanceId);

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
@@ -16,9 +17,13 @@ namespace SaaSApp.Api.Controllers;
 public sealed class FormController : ControllerBase
 {
     private readonly IFormService _formService;
+    private readonly IFormEntryService _formEntryService;
 
-    public FormController(IFormService formService) =>
+    public FormController(IFormService formService, IFormEntryService formEntryService)
+    {
         _formService = formService;
+        _formEntryService = formEntryService;
+    }
 
     /// <summary>Add new form from designer JSON (v5 POST /api/form).</summary>
     [HttpPost]
@@ -169,6 +174,73 @@ public sealed class FormController : ControllerBase
                 FormDeleteStatus.Deleted => NoContent(),
                 _ => NotFound(result.Message ?? "Not Found")
             };
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Add or update a form entry (v5 POST /api/form/{id}/entry/{entryId}).
+    /// Use <c>entryId=0</c> to create; existing <c>itemId</c> to update.
+    /// </summary>
+    [HttpPost("{id}/entry/{entryId:int}")]
+    [ProducesResponseType(typeof(FormEntryResult), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(FormEntryResult), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(FormEntryResult), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpsertEntry(
+        string id,
+        int entryId,
+        [FromBody] JsonElement body,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return NotFound("ID mismatch");
+
+        try
+        {
+            var result = await _formEntryService.UpsertEntryAsync(id, entryId, body, cancellationToken);
+            return result.Id switch
+            {
+                1 => StatusCode(StatusCodes.Status201Created, result),
+                2 => StatusCode(StatusCodes.Status202Accepted, result),
+                3 => StatusCode(StatusCodes.Status409Conflict, result),
+                _ => StatusCode(StatusCodes.Status404NotFound, result)
+            };
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Get form entry by itemId (v5 GET /api/form/{id}/entry/{entryId}).</summary>
+    [HttpGet("{id}/entry/{entryId:int}")]
+    [ProducesResponseType(typeof(IReadOnlyList<Dictionary<string, object?>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetEntry(string id, int entryId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id) || entryId <= 0)
+            return NotFound();
+
+        try
+        {
+            var result = await _formEntryService.GetEntriesAsync(
+                id,
+                entryId.ToString(CultureInfo.InvariantCulture),
+                cancellationToken);
+            if (result.Status != FormEntryGetStatus.Found || result.Entries == null || result.Entries.Count == 0)
+                return NotFound();
+
+            return Ok(result.Entries);
         }
         catch (InvalidOperationException ex)
         {

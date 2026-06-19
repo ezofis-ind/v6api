@@ -16,29 +16,27 @@ public sealed class GetInstanceCommentsQueryHandler : IRequestHandler<GetInstanc
 
     public async Task<GetInstanceCommentsQueryResult> Handle(GetInstanceCommentsQuery request, CancellationToken cancellationToken)
     {
-        // Get workflow instance to find workflow ID
         var instance = await _workflowRepository.GetInstanceByIdAsync(request.InstanceId, cancellationToken);
-        if (instance == null)
-            throw new InvalidOperationException("Workflow instance not found.");
+        WorkflowInstanceScopeValidator.EnsureInstanceBelongsToWorkflow(instance, request.WorkflowId, request.InstanceId);
 
-        // Get comments from workflow-specific table
-        var comments = await _dynamicTableRepository.GetCommentsAsync(instance.WorkflowId, request.InstanceId, cancellationToken);
+        var comments = await _dynamicTableRepository.GetCommentsAsync(request.WorkflowId, request.InstanceId, cancellationToken);
 
         var commentItems = comments.Select(c => new CommentItem(
-            (Guid)c.Id,
-            (Guid)c.WorkflowInstanceId,
+            c.Id,
+            request.WorkflowId,
+            c.WorkflowInstanceId,
             c.StepInstanceId,
-            (string)c.Comments,
+            c.Comments,
             c.ExternalCommentsBy,
-            (int)c.ShowTo,
+            c.ShowTo,
             c.EmbedJson,
-            (bool)c.EmbedStatus,
-            (DateTime)c.CreatedAtUtc,
-            (Guid)c.CreatedBy
+            c.EmbedStatus,
+            c.CreatedAtUtc,
+            c.CreatedBy
         )).ToList();
 
-        var tableName = _dynamicTableRepository.GetTableName(instance.WorkflowId, "WorkflowComments");
+        var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowComments");
 
-        return new GetInstanceCommentsQueryResult(commentItems, tableName);
+        return new GetInstanceCommentsQueryResult(request.WorkflowId, request.InstanceId, commentItems, tableName);
     }
 }

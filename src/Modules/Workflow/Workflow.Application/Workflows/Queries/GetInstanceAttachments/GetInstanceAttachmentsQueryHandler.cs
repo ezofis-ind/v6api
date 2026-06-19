@@ -18,19 +18,17 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
 
     public async Task<GetInstanceAttachmentsQueryResult> Handle(GetInstanceAttachmentsQuery request, CancellationToken cancellationToken)
     {
-        // Get workflow instance to find workflow ID
         var instance = await _workflowRepository.GetInstanceByIdAsync(request.InstanceId, cancellationToken);
-        if (instance == null)
-            throw new InvalidOperationException("Workflow instance not found.");
+        WorkflowInstanceScopeValidator.EnsureInstanceBelongsToWorkflow(instance, request.WorkflowId, request.InstanceId);
 
-        var workflow = await _workflowRepository.GetByIdAsync(instance.WorkflowId, cancellationToken);
-        var attachments = await _dynamicTableRepository.GetAttachmentsAsync(instance.WorkflowId, request.InstanceId, cancellationToken);
+        var workflow = await _workflowRepository.GetByIdAsync(request.WorkflowId, cancellationToken);
+        var attachments = await _dynamicTableRepository.GetAttachmentsAsync(request.WorkflowId, request.InstanceId, cancellationToken);
         var workflowRepositoryGuid = TryParseRepositoryGuid(workflow?.RepositoryId);
 
         var attachmentItems = attachments.Select(a => new AttachmentItem(
             a.Id,
             a.WorkflowInstanceId,
-            instance.WorkflowId,
+            request.WorkflowId,
             a.FileName ?? string.Empty,
             a.FilePath ?? string.Empty,
             a.FileSize,
@@ -42,9 +40,9 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
             RepositoryId: a.RepositoryId ?? workflowRepositoryGuid,
             ItemId: a.ItemId)).ToList();
 
-        var tableName = _dynamicTableRepository.GetTableName(instance.WorkflowId, "WorkflowAttachments");
+        var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowAttachments");
 
-        return new GetInstanceAttachmentsQueryResult(attachmentItems, tableName);
+        return new GetInstanceAttachmentsQueryResult(request.WorkflowId, request.InstanceId, attachmentItems, tableName);
     }
 
     private static Guid? TryParseRepositoryGuid(string? repositoryIdLink)
@@ -58,5 +56,4 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
 
         return trimmed.Length == 32 && Guid.TryParseExact(trimmed, "N", out guid) ? guid : null;
     }
-
 }

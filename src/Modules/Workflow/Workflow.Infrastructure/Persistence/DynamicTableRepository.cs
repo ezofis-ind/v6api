@@ -23,11 +23,12 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         return $"workflow.{entityType}_{suffix}";
     }
 
-    public async Task AddCommentAsync(Guid workflowId, Guid workflowInstanceId, string comments, Guid createdBy, Guid? stepInstanceId = null, string? externalCommentsBy = null, int showTo = 0, CancellationToken cancellationToken = default)
+    public async Task<Guid> AddCommentAsync(Guid workflowId, Guid workflowInstanceId, string comments, Guid createdBy, Guid? stepInstanceId = null, string? externalCommentsBy = null, int showTo = 0, CancellationToken cancellationToken = default)
     {
         var tableName = GetTableName(workflowId, "WorkflowComments");
         var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
         var connectionString = _tenantContext.ConnectionString ?? throw new InvalidOperationException("Connection string is required.");
+        var commentId = Guid.NewGuid();
 
         var sql = $@"
             INSERT INTO {tableName} 
@@ -39,7 +40,7 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         await connection.OpenAsync(cancellationToken);
 
         await using var command = new SqlCommand(sql, connection);
-        command.Parameters.AddWithValue("@Id", Guid.NewGuid());
+        command.Parameters.AddWithValue("@Id", commentId);
         command.Parameters.AddWithValue("@TenantId", tenantId);
         command.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
         command.Parameters.AddWithValue("@StepInstanceId", (object?)stepInstanceId ?? DBNull.Value);
@@ -49,6 +50,7 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         command.Parameters.AddWithValue("@CreatedBy", createdBy);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+        return commentId;
     }
 
     public async Task<Guid> AddAttachmentAsync(
@@ -101,7 +103,7 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         return attachmentId;
     }
 
-    public async Task<List<dynamic>> GetCommentsAsync(Guid workflowId, Guid workflowInstanceId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<WorkflowCommentRowDto>> GetCommentsAsync(Guid workflowId, Guid workflowInstanceId, CancellationToken cancellationToken = default)
     {
         var tableName = GetTableName(workflowId, "WorkflowComments");
         var connectionString = _tenantContext.ConnectionString ?? throw new InvalidOperationException("Connection string is required.");
@@ -114,7 +116,7 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
             WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0
             ORDER BY CreatedAtUtc DESC";
 
-        var results = new List<dynamic>();
+        var results = new List<WorkflowCommentRowDto>();
 
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -125,19 +127,17 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            results.Add(new
-            {
-                Id = reader.GetGuid(0),
-                WorkflowInstanceId = reader.GetGuid(1),
-                StepInstanceId = reader.IsDBNull(2) ? (Guid?)null : reader.GetGuid(2),
-                Comments = reader.GetString(3),
-                ExternalCommentsBy = reader.IsDBNull(4) ? null : reader.GetString(4),
-                ShowTo = reader.GetInt32(5),
-                EmbedJson = reader.IsDBNull(6) ? null : reader.GetString(6),
-                EmbedStatus = reader.GetBoolean(7),
-                CreatedAtUtc = reader.GetDateTime(8),
-                CreatedBy = reader.GetGuid(9)
-            });
+            results.Add(new WorkflowCommentRowDto(
+                Id: reader.GetGuid(0),
+                WorkflowInstanceId: reader.GetGuid(1),
+                StepInstanceId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
+                Comments: reader.GetString(3),
+                ExternalCommentsBy: reader.IsDBNull(4) ? null : reader.GetString(4),
+                ShowTo: reader.GetInt32(5),
+                EmbedJson: reader.IsDBNull(6) ? null : reader.GetString(6),
+                EmbedStatus: reader.GetBoolean(7),
+                CreatedAtUtc: reader.GetDateTime(8),
+                CreatedBy: reader.GetGuid(9)));
         }
 
         return results;

@@ -12,7 +12,9 @@ public record MoveToNextStepCommand(
     MoveToNextStepApAgentPayload? ApAgent = null,
     string? FormId = null,
     int? FormEntryId = null,
-    IReadOnlyDictionary<string, string>? FormDataFields = null
+    IReadOnlyDictionary<string, string>? FormDataFields = null,
+    string? FormLineItemsJson = null,
+    string? SubmittedFormDataJson = null
 ) : IRequest<MoveToNextStepCommandResult>;
 
 public record MoveToNextStepCommandResult(
