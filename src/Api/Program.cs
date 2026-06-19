@@ -215,8 +215,9 @@ if (showDetailedErrors)
 
 app.UseSerilogRequestLogging();
 
-// IIS virtual directory support (example: /EzofisV6Api)
-var pathBase = builder.Configuration["PathBase"];
+// IIS virtual directory support (example: /V6API). Also reads ASPNETCORE_PATHBASE env var.
+var pathBase = builder.Configuration["PathBase"]
+    ?? Environment.GetEnvironmentVariable("ASPNETCORE_PATHBASE");
 if (!string.IsNullOrWhiteSpace(pathBase))
 {
     app.UsePathBase(pathBase);

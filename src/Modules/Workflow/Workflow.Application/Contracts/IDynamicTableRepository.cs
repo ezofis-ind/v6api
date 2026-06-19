@@ -10,7 +10,7 @@ public interface IDynamicTableRepository
     string GetTableName(Guid workflowId, string entityType);
     
     /// <summary>Add comment to workflow-specific table.</summary>
-    Task AddCommentAsync(Guid workflowId, Guid workflowInstanceId, string comments, Guid createdBy, Guid? stepInstanceId = null, string? externalCommentsBy = null, int showTo = 0, CancellationToken cancellationToken = default);
+    Task<Guid> AddCommentAsync(Guid workflowId, Guid workflowInstanceId, string comments, Guid createdBy, Guid? stepInstanceId = null, string? externalCommentsBy = null, int showTo = 0, CancellationToken cancellationToken = default);
     
     /// <summary>Add attachment to workflow-specific table.</summary>
     Task<Guid> AddAttachmentAsync(
@@ -28,7 +28,7 @@ public interface IDynamicTableRepository
         CancellationToken cancellationToken = default);
     
     /// <summary>Get comments for a workflow instance.</summary>
-    Task<List<dynamic>> GetCommentsAsync(Guid workflowId, Guid workflowInstanceId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<WorkflowCommentRowDto>> GetCommentsAsync(Guid workflowId, Guid workflowInstanceId, CancellationToken cancellationToken = default);
     
     /// <summary>Get attachments for a workflow instance.</summary>
     Task<IReadOnlyList<WorkflowAttachmentRowDto>> GetAttachmentsAsync(
@@ -52,3 +52,16 @@ public sealed record WorkflowAttachmentRowDto(
     Guid? RepositoryId,
     Guid? ItemId,
     string? FormJsonId);
+
+/// <summary>Row from workflow.WorkflowComments_{suffix}.</summary>
+public sealed record WorkflowCommentRowDto(
+    Guid Id,
+    Guid WorkflowInstanceId,
+    Guid? StepInstanceId,
+    string Comments,
+    string? ExternalCommentsBy,
+    int ShowTo,
+    string? EmbedJson,
+    bool EmbedStatus,
+    DateTime CreatedAtUtc,
+    Guid CreatedBy);

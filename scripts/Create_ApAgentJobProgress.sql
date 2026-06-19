@@ -27,9 +27,21 @@ BEGIN
         Message           NVARCHAR(2000)    NULL,
         ProgressPercent   INT               NULL,
         ErrorMessage      NVARCHAR(MAX)     NULL,
+        FormData          NVARCHAR(MAX)     NULL,
         CreatedAtUtc      DATETIME2         NOT NULL CONSTRAINT DF_ApAgentJobProgress_CreatedAt DEFAULT SYSUTCDATETIME(),
         UpdatedAtUtc      DATETIME2         NOT NULL CONSTRAINT DF_ApAgentJobProgress_UpdatedAt DEFAULT SYSUTCDATETIME()
     );
+END
+GO
+
+IF EXISTS (
+    SELECT 1
+    FROM sys.tables t
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'workflow' AND t.name = N'ApAgentJobProgress')
+   AND COL_LENGTH(N'workflow.ApAgentJobProgress', N'FormData') IS NULL
+BEGIN
+    ALTER TABLE workflow.ApAgentJobProgress ADD FormData NVARCHAR(MAX) NULL;
 END
 GO
 

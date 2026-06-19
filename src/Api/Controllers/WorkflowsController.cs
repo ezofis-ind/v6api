@@ -841,7 +841,8 @@ public sealed class WorkflowsController : ControllerBase
     }
 
     /// <summary>
-    /// Instance flow history from transaction table only (one row per transaction: move / submit / complete).
+    /// Instance timeline: start → ap_agent → verified → approved → completed (who did it and when).
+    /// Data source: <c>workflow.transaction_{suffix}</c> for the instance.
     /// </summary>
     [HttpGet("{workflowId:guid}/instances/{instanceId:guid}/history")]
     [ProducesResponseType(typeof(WorkflowInstanceHistoryResult), StatusCodes.Status200OK)]
@@ -994,45 +995,77 @@ public sealed class WorkflowsController : ControllerBase
     }
 
     /// <summary>Add a comment to a workflow instance (stored in workflow-specific table).</summary>
-    [HttpPost("instances/{instanceId:guid}/comments")]
+    [HttpPost("{workflowId:guid}/instances/{instanceId:guid}/comments")]
     [ProducesResponseType(typeof(AddCommentCommandResult), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> AddComment(Guid instanceId, [FromBody] AddCommentRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> AddComment(Guid workflowId, Guid instanceId, [FromBody] AddCommentRequest request, CancellationToken cancellationToken)
     {
-        var command = new AddCommentCommand(instanceId, request.Comments, request.StepInstanceId, request.ExternalCommentsBy, request.ShowTo);
-        var result = await _mediator.Send(command, cancellationToken);
-        return CreatedAtAction(nameof(AddComment), new { instanceId }, result);
+        try
+        {
+            var command = new AddCommentCommand(workflowId, instanceId, request.Comments, request.StepInstanceId, request.ExternalCommentsBy, request.ShowTo);
+            var result = await _mediator.Send(command, cancellationToken);
+            return CreatedAtAction(nameof(AddComment), new { workflowId, instanceId }, result);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("does not belong", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
     }
 
     /// <summary>Add an attachment to a workflow instance (stored in workflow-specific table).</summary>
-    [HttpPost("instances/{instanceId:guid}/attachments")]
+    [HttpPost("{workflowId:guid}/instances/{instanceId:guid}/attachments")]
     [ProducesResponseType(typeof(AddAttachmentCommandResult), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> AddAttachment(Guid instanceId, [FromBody] AddAttachmentRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> AddAttachment(Guid workflowId, Guid instanceId, [FromBody] AddAttachmentRequest request, CancellationToken cancellationToken)
     {
-        var command = new AddAttachmentCommand(instanceId, request.FileName, request.FilePath, request.FileSize, request.ContentType);
-        var result = await _mediator.Send(command, cancellationToken);
-        return CreatedAtAction(nameof(AddAttachment), new { instanceId }, result);
+        try
+        {
+            var command = new AddAttachmentCommand(workflowId, instanceId, request.FileName, request.FilePath, request.FileSize, request.ContentType);
+            var result = await _mediator.Send(command, cancellationToken);
+            return CreatedAtAction(nameof(AddAttachment), new { workflowId, instanceId }, result);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("does not belong", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
     }
 
     /// <summary>Get comments for a workflow instance from workflow-specific table.</summary>
-    [HttpGet("instances/{instanceId:guid}/comments")]
+    [HttpGet("{workflowId:guid}/instances/{instanceId:guid}/comments")]
     [ProducesResponseType(typeof(GetInstanceCommentsQueryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetComments(Guid instanceId, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetComments(Guid workflowId, Guid instanceId, CancellationToken cancellationToken)
     {
-        var result = await _mediator.Send(new GetInstanceCommentsQuery(instanceId), cancellationToken);
-        return Ok(result);
+        try
+        {
+            var result = await _mediator.Send(new GetInstanceCommentsQuery(workflowId, instanceId), cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("does not belong", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
     }
 
     /// <summary>Get attachments for a workflow instance from workflow-specific table.</summary>
-    [HttpGet("instances/{instanceId:guid}/attachments")]
+    [HttpGet("{workflowId:guid}/instances/{instanceId:guid}/attachments")]
     [ProducesResponseType(typeof(GetInstanceAttachmentsQueryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetAttachments(Guid instanceId, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetAttachments(Guid workflowId, Guid instanceId, CancellationToken cancellationToken)
     {
-        var result = await _mediator.Send(new GetInstanceAttachmentsQuery(instanceId), cancellationToken);
-        return Ok(result);
+        try
+        {
+            var result = await _mediator.Send(new GetInstanceAttachmentsQuery(workflowId, instanceId), cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("does not belong", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
     }
 
     /// <summary>Approve a workflow step and optionally move to next stage.</summary>
@@ -1089,6 +1122,27 @@ public sealed class WorkflowsController : ControllerBase
 
             var result = await _apAgentMoveNext.ApplyMetadataAsync(
                 tenantId, request, GetWorkflowUserId(), cancellationToken);
+
+            var formDataJson = await _ezfbFormDataLoader.LoadFormDataJsonAsync(
+                parsed.FormId,
+                parsed.FormEntryId,
+                cancellationToken);
+            if (!string.IsNullOrWhiteSpace(formDataJson))
+            {
+                try
+                {
+                    await _apAgentJobProgress.UpdateFormDataByInstanceAsync(
+                        workflowId,
+                        instanceId,
+                        formDataJson,
+                        cancellationToken);
+                }
+                catch (InvalidOperationException)
+                {
+                    // No AP Agent job row for this instance; metadata apply still succeeds.
+                }
+            }
+
             return Ok(result);
         }
         catch (ArgumentException ex)
@@ -1150,7 +1204,7 @@ public sealed class WorkflowsController : ControllerBase
 
         await _apAgentJobProgress.UpdateProgressAsync(
             jobId,
-            new ApAgentJobProgressUpdate(request.Stage, request.Message, request.Percent),
+            new ApAgentJobProgressUpdate(request.Stage, request.Message, request.Percent, request.FormData),
             cancellationToken);
         return NoContent();
     }
@@ -1170,7 +1224,7 @@ public sealed class WorkflowsController : ControllerBase
             await _apAgentJobProgress.UpdateProgressByInstanceAsync(
                 workflowId,
                 instanceId,
-                new ApAgentJobProgressUpdate(request.Stage, request.Message, request.Percent),
+                new ApAgentJobProgressUpdate(request.Stage, request.Message, request.Percent, request.FormData),
                 cancellationToken);
             return NoContent();
         }
@@ -1891,7 +1945,8 @@ public sealed record WorkflowByUserItem(
 public sealed record ApAgentProgressRequest(
     string? Stage = null,
     string? Message = null,
-    int? Percent = null);
+    int? Percent = null,
+    string? FormData = null);
 
 public sealed record WorkflowInboxRequest(
     WorkflowAllSortBy? SortBy = null,

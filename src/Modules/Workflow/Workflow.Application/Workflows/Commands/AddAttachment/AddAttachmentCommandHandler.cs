@@ -20,13 +20,11 @@ public sealed class AddAttachmentCommandHandler : IRequestHandler<AddAttachmentC
     {
         var userId = _currentUserProvider.GetUserId() ?? throw new InvalidOperationException("User context is required.");
 
-        // Get workflow instance to find workflow ID
         var instance = await _workflowRepository.GetInstanceByIdAsync(request.WorkflowInstanceId, cancellationToken);
-        if (instance == null)
-            throw new InvalidOperationException("Workflow instance not found.");
+        WorkflowInstanceScopeValidator.EnsureInstanceBelongsToWorkflow(instance, request.WorkflowId, request.WorkflowInstanceId);
 
         var attachmentId = await _dynamicTableRepository.AddAttachmentAsync(
-            instance.WorkflowId,
+            request.WorkflowId,
             request.WorkflowInstanceId,
             request.FileName,
             request.FilePath,
@@ -35,8 +33,8 @@ public sealed class AddAttachmentCommandHandler : IRequestHandler<AddAttachmentC
             request.ContentType,
             cancellationToken: cancellationToken);
 
-        var tableName = _dynamicTableRepository.GetTableName(instance.WorkflowId, "WorkflowAttachments");
+        var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowAttachments");
 
-        return new AddAttachmentCommandResult(attachmentId, tableName);
+        return new AddAttachmentCommandResult(attachmentId, request.WorkflowId, request.WorkflowInstanceId, tableName);
     }
 }
