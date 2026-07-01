@@ -37,27 +37,6 @@ internal static class RepositoryFolderMetadataResolver
         return null;
     }
 
-    public static void TryApplyFilenameAsLeafMetadata(
-        IDictionary<string, string> metadata,
-        IReadOnlyList<RepositoryFieldDto> folderFields,
-        string fileName)
-    {
-        if (folderFields.Count == 0)
-            return;
-
-        var leaf = folderFields.OrderBy(f => f.Level).ThenBy(f => f.OrderId ?? int.MaxValue).Last();
-        if (ResolveSegmentName(ToReadOnly(metadata), leaf) != null)
-            return;
-
-        var stem = Path.GetFileNameWithoutExtension(fileName);
-        if (string.IsNullOrWhiteSpace(stem))
-            return;
-
-        metadata[leaf.SqlColumnName] = stem;
-        if (!string.Equals(leaf.Name, leaf.SqlColumnName, StringComparison.OrdinalIgnoreCase))
-            metadata[leaf.Name] = stem;
-    }
-
     private static IReadOnlyDictionary<string, string> ToReadOnly(IDictionary<string, string> metadata) =>
         metadata as IReadOnlyDictionary<string, string>
         ?? new Dictionary<string, string>(metadata, StringComparer.OrdinalIgnoreCase);

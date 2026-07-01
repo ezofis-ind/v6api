@@ -62,6 +62,7 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IFormJsonStorageService, FormJsonStorageService>();
         services.AddScoped<IFormService, FormService>();
         services.AddScoped<IFormEntryService, FormEntryService>();
+        services.AddScoped<IFormMasterFileUploadService, FormMasterFileUploadService>();
         services.AddScoped<IConnectorService, ConnectorService>();
         services.AddScoped<IWorkflowSecurityService, WorkflowSecurityService>();
         services.AddScoped<IWorkflowInitiationService, WorkflowInitiationService>();
@@ -72,6 +73,7 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IUserEmailLookup, UserEmailLookup>();
         services.AddScoped<IWorkflowLegacyMailboxQueryService, WorkflowLegacyMailboxQueryService>();
         services.AddScoped<IWorkflowInstanceHistoryService, WorkflowInstanceHistoryService>();
+        services.AddScoped<IWorkflowProcessAddonService, WorkflowProcessAddonService>();
         services.AddScoped<IWorkflowLegacyTransactionSyncService, WorkflowLegacyTransactionSyncService>();
         services.AddScoped<IWorkflowStepSyncService, WorkflowStepSyncService>();
         services.AddScoped<IWorkflowStartBootstrapService, WorkflowStartBootstrapService>();
@@ -79,6 +81,14 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IWorkflowEzfbFormDataLoader, WorkflowEzfbFormDataLoader>();
         services.AddScoped<IApAgentJobProgressService, ApAgentJobProgressService>();
         services.AddScoped<IApAgentJobStatusService, ApAgentJobStatusService>();
+        services.Configure<FormMasterFileImportOptions>(configuration.GetSection(FormMasterFileImportOptions.SectionName));
+        services.AddHttpClient(nameof(MasterFileImportPythonPipelineService), client =>
+        {
+            client.Timeout = Timeout.InfiniteTimeSpan;
+        });
+        services.AddScoped<IMasterFileImportPythonPipelineService, MasterFileImportPythonPipelineService>();
+        services.AddScoped<IMasterFileImportPythonJobClient, MasterFileImportPythonJobClient>();
+        services.AddScoped<RunMasterFileImportPythonJob>();
         services.Configure<ApAgentOptions>(configuration.GetSection(ApAgentOptions.SectionName));
         services.AddHttpClient(nameof(ApAgentPythonPipelineService), client =>
         {

@@ -7,6 +7,8 @@ namespace SaaSApp.Workflow.Application.Contracts;
 public interface IWorkflowTableCreator
 {
     Task CreateWorkflowTablesAsync(Guid workflowId, string connectionString, CancellationToken cancellationToken = default);
+    Task<bool> WorkflowCoreTablesExistAsync(Guid workflowId, string connectionString, CancellationToken cancellationToken = default);
+    Task EnsureWorkflowTablesForStartAsync(Guid workflowId, string connectionString, CancellationToken cancellationToken = default);
     Task EnsureLegacyTransactionTableAsync(Guid workflowId, string connectionString, CancellationToken cancellationToken = default);
     Task EnsureLegacyMailboxTablesAsync(Guid workflowId, string connectionString, CancellationToken cancellationToken = default);
     Task EnsureAgentDataValidationTableAsync(Guid workflowId, string connectionString, CancellationToken cancellationToken = default);

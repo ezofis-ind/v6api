@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SaaSApp.Repository.Application.Contracts;
 using SaaSApp.Repository.Infrastructure.Options;
+using SaaSApp.Repository.Infrastructure.Jobs;
 using SaaSApp.Repository.Infrastructure.Services;
 using SaaSApp.Repository.Infrastructure.Storage;
 
@@ -12,6 +13,8 @@ public static class RepositoryInfrastructureServiceCollectionExtensions
     public static IServiceCollection AddRepositoryInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<RepositoryFileStorageOptions>(configuration.GetSection(RepositoryFileStorageOptions.SectionName));
+        services.Configure<RepositoryOcrOptions>(configuration.GetSection(RepositoryOcrOptions.SectionName));
+        services.AddHttpClient<IOcrExtractionService, OcrExtractionService>();
         services.AddScoped<IRepositorySchemaService, RepositorySchemaService>();
         services.AddScoped<IRepositoryStorageSeedService, RepositoryStorageSeedService>();
         services.AddScoped<IStaticRepositoryProvisioner, StaticRepositoryProvisioner>();
@@ -25,6 +28,8 @@ public static class RepositoryInfrastructureServiceCollectionExtensions
         services.AddScoped<RepositoryWorkflowAttachService>();
         services.AddScoped<IRepositoryFileUploadService, RepositoryFileUploadService>();
         services.AddScoped<IRepositoryArchiveFileUploadService, RepositoryArchiveFileUploadService>();
+        services.AddScoped<IRepositoryUploadIndexService, RepositoryUploadIndexService>();
+        services.AddScoped<ArchiveStageItemJob>();
         return services;
     }
 }

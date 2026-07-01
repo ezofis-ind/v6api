@@ -7,7 +7,10 @@ using SaaSApp.Workflow.Application.Contracts;
 
 namespace SaaSApp.Workflow.Infrastructure.Jobs;
 
-/// <summary>Hangfire job: POST start payload to Python AP Agent (move-next is called by Python).</summary>
+/// <summary>
+/// Hangfire job: POST start payload to Python AP Agent (move-next is called by Python).
+/// Jobs run in parallel across tenants/instances; concurrency is limited only by Hangfire:WorkerCount.
+/// </summary>
 public sealed class RunApAgentPythonJob
 {
     private readonly IServiceScopeFactory _scopeFactory;
@@ -24,7 +27,6 @@ public sealed class RunApAgentPythonJob
         _logger = logger;
     }
 
-    [DisableConcurrentExecution(timeoutInSeconds: 600)]
     [AutomaticRetry(Attempts = 0)]
     public async Task Execute(ApAgentPythonJobArgs args, PerformContext? context)
     {

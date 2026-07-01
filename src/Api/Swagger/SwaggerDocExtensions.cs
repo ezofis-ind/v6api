@@ -17,6 +17,7 @@ public static class SwaggerDocExtensions
 
 - **Signup** (`POST /api/Signup`): **No JWT required.** Create a new tenant (database + catalog). Optional `password` creates admin for Ezofis login.
 - **Ezofis login** (`POST /api/auth/ezofis/login`): **No JWT required.** Email + password. Requires **X-Tenant-Id** header. If 2FA enabled, returns `tempToken`; call `POST /api/auth/2fa/complete` with code.
+- **Social login** (`POST /api/auth/social/login`): **No JWT required.** Email + provider (`google` or `microsoft`). No password. Requires **X-Tenant-Id**. User must have matching `loginType` / `authStrategy` in tenant DB.
 - **2FA complete** (`POST /api/auth/2fa/complete`): Complete Ezofis login after 2FA. Requires **X-Tenant-Id**.
 - **2FA setup/enable/disable** (`POST /api/auth/2fa/setup`, `/enable`, `/disable`): Authenticated user can enable or disable TOTP 2FA.
 - **My organizations** (`GET /api/me/tenants`): Returns tenants for current user (for org picker). Requires JWT.
@@ -91,7 +92,9 @@ public class TenantHeaderOperationFilter : IOperationFilter
             path.IndexOf("tenant/validateOTP", StringComparison.OrdinalIgnoreCase) >= 0)
             return; // Pre-signup flows and tenant lookup do not need X-Tenant-Id
 
-        var isLoginOrTwoFactorComplete = path.Contains("ezofis/login") || path.Contains("2fa/complete");
+        var isLoginOrTwoFactorComplete = path.Contains("ezofis/login") ||
+            path.Contains("2fa/complete") ||
+            path.Contains("social/login", StringComparison.OrdinalIgnoreCase);
 
         operation.Parameters ??= new List<OpenApiParameter>();
         operation.Parameters.Add(new OpenApiParameter

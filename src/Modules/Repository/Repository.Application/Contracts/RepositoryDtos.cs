@@ -101,8 +101,8 @@ public sealed record BrowsePathDto(string Id, string Label, IReadOnlyList<string
 /// </summary>
 public sealed class BrowseFolderQuery
 {
-    /// <summary>Browse path from GET /browse/structure (e.g. by-Supplier).</summary>
-    public string PathId { get; init; } = "by-Supplier";
+    /// <summary>Browse path from GET /browse/structure (e.g. by-Supplier). Omit to use the first folder field path.</summary>
+    public string PathId { get; init; } = "";
 
     public int Page { get; init; } = 1;
 

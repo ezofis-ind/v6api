@@ -4,6 +4,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
 using SaaSApp.Api.Middleware;
+using SaaSApp.Api.Options;
 using SaaSApp.Api.Services;
 using SaaSApp.Api.Swagger;
 using SaaSApp.Billing.Application;
@@ -42,11 +43,14 @@ builder.Services.AddHttpsRedirection(options =>
 builder.Services.AddMultiTenancy();
 builder.Services.AddCatalog(builder.Configuration);
 builder.Services.AddScoped<ITenantSignupService, TenantSignupService>();
+builder.Services.Configure<TenantPilotUserOptions>(
+    builder.Configuration.GetSection(TenantPilotUserOptions.SectionName));
 builder.Services.AddScoped<IWorkflowSchemaService, WorkflowSchemaService>();
 builder.Services.AddScoped<IDmsSchemaService, DmsSchemaService>();
 builder.Services.AddHttpClient(nameof(LegacyWorkflowTransactionService));
 builder.Services.AddScoped<ILegacyWorkflowTransactionService, LegacyWorkflowTransactionService>();
 builder.Services.AddScoped<SaaSApp.Workflow.Application.Contracts.IWorkflowStartAttachmentUploader, WorkflowStartAttachmentUploader>();
+builder.Services.AddScoped<SaaSApp.Workflow.Application.Contracts.IWorkflowAttachmentArchiveService, WorkflowAttachmentArchiveService>();
 builder.Services.AddMemoryCache();
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 if (!string.IsNullOrWhiteSpace(redisConnectionString))
@@ -163,15 +167,37 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 var hangfireEnabled = !string.IsNullOrWhiteSpace(connectionString);
 if (hangfireEnabled)
 {
+    var hangfireStorageOptions = new SqlServerStorageOptions
+    {
+        // Reduce catalog DB polling so HTTP requests are not competing with Hangfire every few seconds.
+        QueuePollInterval = TimeSpan.FromSeconds(15),
+        JobExpirationCheckInterval = TimeSpan.FromHours(1),
+    };
+
     builder.Services.AddHangfire(config => config
         .SetDataCompatibilityLevel(Hangfire.CompatibilityLevel.Version_180)
         .UseSimpleAssemblyNameTypeSerializer()
         .UseRecommendedSerializerSettings()
-        .UseSqlServerStorage(connectionString));
+        .UseSqlServerStorage(connectionString, hangfireStorageOptions));
+
     if (builder.Configuration.GetValue<bool?>("Hangfire:RunServerInApi") ?? true)
     {
+        // API host: keep workers low — each job holds SQL + HTTP to Python (minutes). High WorkerCount
+        // starves IIS/Kestrel threads and makes every API call feel slow.
+        var apiWorkers = builder.Configuration.GetValue<int?>("Hangfire:ApiWorkerCount")
+            ?? builder.Configuration.GetValue<int?>("Hangfire:WorkerCount")
+            ?? 2;
+        apiWorkers = Math.Clamp(apiWorkers, 1, 4);
+
         builder.Services.AddHangfireServer(options =>
-            options.WorkerCount = builder.Configuration.GetValue<int?>("Hangfire:WorkerCount") ?? 5);
+        {
+            options.WorkerCount = apiWorkers;
+            options.ServerName = $"{Environment.MachineName}:V6Api";
+            options.Queues = ["default"];
+            options.SchedulePollingInterval = TimeSpan.FromSeconds(15);
+        });
+
+        Log.Information("Hangfire server in API process: {WorkerCount} worker(s)", apiWorkers);
     }
 }
 else

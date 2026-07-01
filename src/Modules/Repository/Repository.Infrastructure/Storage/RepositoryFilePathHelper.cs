@@ -5,6 +5,17 @@ namespace SaaSApp.Repository.Infrastructure.Storage;
 internal static class RepositoryFilePathHelper
 {
     public const string ArchiveRoot = "archive";
+    public const string MonitorRoot = "monitor";
+
+    /// <summary>Staging path before index/archive: monitor/{repositoryId}/{timestamp}/{fileName}</summary>
+    public static string BuildMonitorRelativePath(Guid repositoryId, string fileName)
+    {
+        var ts = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
+        var safe = SanitizePathSegment(Path.GetFileName(fileName));
+        if (string.IsNullOrWhiteSpace(safe))
+            safe = "document.pdf";
+        return $"{MonitorRoot}/{repositoryId:N}/{ts}/{safe}";
+    }
 
     /// <summary>Legacy flat path when archive layout is not used.</summary>
     public static string BuildFlatRelativePath(Guid repositoryId, Guid itemId, string fileName)
@@ -15,8 +26,7 @@ internal static class RepositoryFilePathHelper
 
     /// <summary>
     /// Tenant container (ezts{tenantId}) + blob path:
-    /// archive/{repositoryName}/{level1}/{level2}/{leafLevelName}.pdf
-    /// The deepest folder level value is the file name (not item GUID).
+    /// archive/{repositoryName}/{folder fields}/{archiveFileName}.ext — archive file name from the highest metadata level above folder levels (e.g. PoNumber).
     /// </summary>
     public static string BuildArchiveRelativePath(
         string repositoryName,
@@ -29,26 +39,9 @@ internal static class RepositoryFilePathHelper
         if (string.IsNullOrWhiteSpace(repoSegment))
             repoSegment = "repository";
 
-        if (folderLevelNames.Count == 0)
-        {
-            var fileSegment = SanitizePathSegment(Path.GetFileNameWithoutExtension(originalFileName));
-            if (string.IsNullOrWhiteSpace(fileSegment))
-                fileSegment = "document";
-            return $"{ArchiveRoot}/{repoSegment}/{AppendVersionToFileSegment($"{fileSegment}{ext}", fileVersion)}";
-        }
-
         var segments = new List<string> { ArchiveRoot, repoSegment };
 
-        if (folderLevelNames.Count == 1)
-        {
-            var leaf = SanitizePathSegment(folderLevelNames[0]);
-            if (string.IsNullOrWhiteSpace(leaf))
-                leaf = "document";
-            segments.Add(AppendVersionToFileSegment($"{leaf}{ext}", fileVersion));
-            return string.Join('/', segments);
-        }
-
-        for (var i = 0; i < folderLevelNames.Count - 1; i++)
+        for (var i = 0; i < folderLevelNames.Count; i++)
         {
             var folder = SanitizePathSegment(folderLevelNames[i]);
             if (string.IsNullOrWhiteSpace(folder))
@@ -56,10 +49,10 @@ internal static class RepositoryFilePathHelper
             segments.Add(folder);
         }
 
-        var fileName = SanitizePathSegment(folderLevelNames[^1]);
-        if (string.IsNullOrWhiteSpace(fileName))
-            fileName = "document";
-        segments.Add(AppendVersionToFileSegment($"{fileName}{ext}", fileVersion));
+        var fileStem = SanitizePathSegment(Path.GetFileNameWithoutExtension(originalFileName));
+        if (string.IsNullOrWhiteSpace(fileStem))
+            fileStem = "document";
+        segments.Add(AppendVersionToFileSegment($"{fileStem}{ext}", fileVersion));
 
         return string.Join('/', segments);
     }
@@ -80,7 +73,7 @@ internal static class RepositoryFilePathHelper
         return string.IsNullOrEmpty(ext) ? stem : stem + ext;
     }
 
-    /// <summary>Display/storage name: <c>invoice_v1.pdf</c>, <c>invoice_v2.pdf</c>.</summary>
+    /// <summary>Display/storage name: <c>invoice.pdf</c> (v1), <c>invoice_v2.pdf</c> (v2+).</summary>
     public static string ApplyVersionToFileName(string fileName, int fileVersion)
     {
         if (fileVersion < 1)
@@ -91,6 +84,9 @@ internal static class RepositoryFilePathHelper
         var stem = Path.GetFileNameWithoutExtension(baseName);
         if (string.IsNullOrWhiteSpace(stem))
             stem = "document";
+
+        if (fileVersion == 1)
+            return $"{stem}{ext}";
 
         return $"{stem}_v{fileVersion}{ext}";
     }
@@ -120,6 +116,9 @@ internal static class RepositoryFilePathHelper
             stem = "document";
 
         stem = StripVersionSuffixFromStem(stem);
+        if (fileVersion == 1)
+            return $"{stem}{ext}";
+
         return $"{stem}_v{fileVersion}{ext}";
     }
 

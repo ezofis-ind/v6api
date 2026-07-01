@@ -8,6 +8,9 @@ public interface IEzofisAuthService
 
     /// <summary>Complete login after 2FA. Verifies TOTP code and returns JWT.</summary>
     Task<LoginResult> CompleteTwoFactorAsync(string tempToken, string code, CancellationToken cancellationToken = default);
+
+    /// <summary>Social login (Google / Microsoft). Email + provider only; no password.</summary>
+    Task<LoginResult> SocialLoginAsync(string email, string provider, Guid tenantId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Result of Ezofis login: either success with JWT or 2FA required with temp token.</summary>

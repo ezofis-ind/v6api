@@ -28,7 +28,8 @@ public sealed class RepositoryFolderService : IRepositoryFolderService
         var repositoryName = await LoadRepositoryNameAsync(connection, repositoryId, tenantId, cancellationToken)
             ?? throw new InvalidOperationException("Repository not found.");
 
-        var folderFields = await LoadFolderStructureFieldsAsync(connection, repositoryId, cancellationToken);
+        var folderFields = RepositoryFolderStructureHelper.OrderFolderFields(
+            await LoadFolderStructureFieldsAsync(connection, repositoryId, cancellationToken));
         if (folderFields.Count == 0)
             return null;
 
@@ -95,8 +96,8 @@ public sealed class RepositoryFolderService : IRepositoryFolderService
                 : $"{parentPathId}/{segmentName}";
         }
 
-        return new RepositoryFolderResolveResult(folderChain[^1], folderChain, folderNames, repositoryName);
-    }
+        var leafFolderId = folderChain.Count > 0 ? folderChain[^1] : Guid.Empty;
+        return new RepositoryFolderResolveResult(leafFolderId, folderChain, folderNames, repositoryName);    }
 
     private static async Task<string?> LoadRepositoryNameAsync(
         SqlConnection connection,

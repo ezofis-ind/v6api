@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Data.SqlClient;
 using SaaSApp.Workflow.Application;
 using SaaSApp.Workflow.Application.Contracts;
@@ -7,6 +8,7 @@ namespace SaaSApp.Workflow.Infrastructure.Services;
 public sealed class ApAgentJobProgressService : IApAgentJobProgressService
 {
     private const string TableName = "workflow.ApAgentJobProgress";
+    private static readonly ConcurrentDictionary<string, byte> TableEnsured = new(StringComparer.Ordinal);
 
     private readonly ITenantContext _tenantContext;
 
@@ -247,6 +249,13 @@ public sealed class ApAgentJobProgressService : IApAgentJobProgressService
 
     private async Task EnsureTableAsync(CancellationToken cancellationToken)
     {
+        var connectionString = _tenantContext.ConnectionString;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        if (TableEnsured.ContainsKey(connectionString))
+            return;
+
         const string ensureSchemaSql = """
             IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'workflow')
                 EXEC(N'CREATE SCHEMA workflow');
@@ -306,6 +315,8 @@ public sealed class ApAgentJobProgressService : IApAgentJobProgressService
             await using var cmd = new SqlCommand(batch, connection);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        TableEnsured.TryAdd(connectionString, 0);
     }
 
     private SqlConnection OpenConnection()

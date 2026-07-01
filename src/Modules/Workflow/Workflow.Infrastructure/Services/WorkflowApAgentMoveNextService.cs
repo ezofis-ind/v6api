@@ -376,6 +376,7 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
 
         if (controls.Count > 0 && ezfbColumns.Count > 0)
         {
+            var updatedEzfbColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in request.Fields)
             {
                 if (IsEmptyValue(value))
@@ -393,6 +394,9 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
                         control.Name);
                     continue;
                 }
+
+                if (!updatedEzfbColumns.Add(col))
+                    continue;
 
                 try
                 {
@@ -660,7 +664,7 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
     {
         value = null;
         var candidates = new List<string> { jsonId };
-        if (TryToEzfbColumnName(jsonId, out var ezfbCol))
+        if (EzfbColumnNaming.TryToColumnName(jsonId, out var ezfbCol))
             candidates.Add(ezfbCol);
         if (!string.IsNullOrWhiteSpace(controlName))
             candidates.Add(controlName.Trim());
@@ -734,7 +738,7 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
                 return true;
             }
 
-            if (TryToEzfbColumnName(row.JsonId, out var ezfbCol)
+            if (EzfbColumnNaming.TryToColumnName(row.JsonId, out var ezfbCol)
                 && string.Equals(ezfbCol, key, StringComparison.OrdinalIgnoreCase))
             {
                 control = row;
@@ -785,11 +789,32 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
         return null;
     }
 
+    /// <summary>
+    /// When AP agent sends the same value as PO Number, PONumber, and PoNumber, keep one canonical key for repository SQL.
+    /// </summary>
+    private static void CollapseRepositoryFieldAliases(Dictionary<string, string> fields)
+    {
+        foreach (var (aliasKey, canonical) in RepositoryFieldAliases)
+        {
+            if (string.Equals(aliasKey, canonical, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!fields.TryGetValue(aliasKey, out var value))
+                continue;
+
+            if (!fields.ContainsKey(canonical) || string.IsNullOrWhiteSpace(fields[canonical]))
+                fields[canonical] = value;
+
+            fields.Remove(aliasKey);
+        }
+    }
+
     private static Dictionary<string, string> BuildRepositoryMetadataFields(
         IReadOnlyDictionary<string, string> fields,
         string? lineItemsJson)
     {
         var dict = new Dictionary<string, string>(fields, StringComparer.OrdinalIgnoreCase);
+        CollapseRepositoryFieldAliases(dict);
         if (string.IsNullOrWhiteSpace(lineItemsJson))
             return dict;
 
@@ -867,39 +892,6 @@ SELECT CAST(@@ROWCOUNT AS int);";
     private static bool IsEmptyValue(string? value) =>
         string.IsNullOrWhiteSpace(value);
 
-    private static string SanitizeColumnName(string name)
-    {
-        var cleaned = Regex.Replace(name.Trim(), @"[^a-zA-Z0-9_]", "");
-        if (cleaned.Length == 0)
-            throw new ArgumentException($"Invalid field name: {name}");
-        if (char.IsDigit(cleaned[0]))
-            cleaned = "F_" + cleaned;
-        return cleaned;
-    }
-
-    /// <summary>Same rules as FormService.EscapeSqlIdentifier — ezfb columns keep jsonId as-is (including leading digits).</summary>
-    private static string ToEzfbColumnName(string jsonId)
-    {
-        var safe = new string(jsonId.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
-        if (string.IsNullOrEmpty(safe))
-            throw new ArgumentException($"Invalid jsonId for ezfb column: {jsonId}");
-        return safe;
-    }
-
-    private static bool TryToEzfbColumnName(string jsonId, out string column)
-    {
-        try
-        {
-            column = ToEzfbColumnName(jsonId);
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            column = string.Empty;
-            return false;
-        }
-    }
-
     private static bool TryResolveEzfbColumn(string jsonId, IReadOnlySet<string> ezfbColumns, out string column)
     {
         column = string.Empty;
@@ -913,14 +905,14 @@ SELECT CAST(@@ROWCOUNT AS int);";
             return true;
         }
 
-        if (TryToEzfbColumnName(trimmed, out var fromJsonId) && ezfbColumns.Contains(fromJsonId))
+        if (EzfbColumnNaming.TryToColumnName(trimmed, out var fromJsonId) && ezfbColumns.Contains(fromJsonId))
         {
             column = fromJsonId;
             return true;
         }
 
         // Legacy: older code used F_ prefix for leading-digit jsonIds.
-        if (TryToEzfbColumnName(trimmed, out var baseName)
+        if (EzfbColumnNaming.TryToColumnName(trimmed, out var baseName)
             && baseName.Length > 0
             && char.IsDigit(baseName[0]))
         {

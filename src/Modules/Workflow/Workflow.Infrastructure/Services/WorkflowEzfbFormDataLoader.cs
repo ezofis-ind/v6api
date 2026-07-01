@@ -183,28 +183,6 @@ FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;";
         return formId;
     }
 
-    private static string ToEzfbColumnName(string jsonId)
-    {
-        var safe = new string(jsonId.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
-        if (string.IsNullOrEmpty(safe))
-            throw new ArgumentException($"Invalid jsonId for ezfb column: {jsonId}");
-        return safe;
-    }
-
-    private static bool TryToEzfbColumnName(string jsonId, out string column)
-    {
-        try
-        {
-            column = ToEzfbColumnName(jsonId);
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            column = string.Empty;
-            return false;
-        }
-    }
-
     private static bool TryResolveEzfbColumn(string jsonId, IReadOnlySet<string> ezfbColumns, out string column)
     {
         column = string.Empty;
@@ -218,13 +196,13 @@ FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;";
             return true;
         }
 
-        if (TryToEzfbColumnName(trimmed, out var fromJsonId) && ezfbColumns.Contains(fromJsonId))
+        if (EzfbColumnNaming.TryToColumnName(trimmed, out var fromJsonId) && ezfbColumns.Contains(fromJsonId))
         {
             column = fromJsonId;
             return true;
         }
 
-        if (TryToEzfbColumnName(trimmed, out var baseName)
+        if (EzfbColumnNaming.TryToColumnName(trimmed, out var baseName)
             && baseName.Length > 0
             && char.IsDigit(baseName[0]))
         {

@@ -1,5 +1,6 @@
 using MediatR;
 using SaaSApp.Workflow.Application.Contracts;
+using SaaSApp.Workflow.Application.Workflows;
 
 namespace SaaSApp.Workflow.Application.Workflows.Queries.GetInstanceComments;
 
@@ -21,7 +22,9 @@ public sealed class GetInstanceCommentsQueryHandler : IRequestHandler<GetInstanc
 
         var comments = await _dynamicTableRepository.GetCommentsAsync(request.WorkflowId, request.InstanceId, cancellationToken);
 
-        var commentItems = comments.Select(c => new CommentItem(
+        var commentItems = comments
+            .Where(c => !WorkflowCommentHelper.IsProceedActionSystemComment(c.Comments))
+            .Select(c => new CommentItem(
             c.Id,
             request.WorkflowId,
             c.WorkflowInstanceId,

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MediatR;
 using SaaSApp.Workflow.Application.Contracts;
+using SaaSApp.Workflow.Application.Workflows;
 
 namespace SaaSApp.Workflow.Application.Workflows.Queries.GetWorkflowById;
 
@@ -30,6 +31,11 @@ public sealed class GetWorkflowByIdQueryHandler : IRequestHandler<GetWorkflowByI
             .ToList();
 
         var workflowJson = await LoadWorkflowJsonElementAsync(request.WorkflowId, cancellationToken);
+        workflowJson = WorkflowJsonDbSyncHelper.ApplyDbMetadata(
+            workflowJson,
+            workflow.Name,
+            workflow.Description,
+            workflow.Status);
 
         return new GetWorkflowByIdQueryResult(
             workflow.Id,

@@ -265,13 +265,20 @@ internal static class RepositoryItemWorkspaceBuilder
 
     private static string? FormatUploadedBy(IReadOnlyDictionary<string, object?> fields)
     {
+        if (fields.TryGetValue("CreatedByName", out var createdByName) && createdByName != null)
+        {
+            var name = createdByName.ToString();
+            if (!string.IsNullOrWhiteSpace(name))
+                return name;
+        }
+
         if (fields.TryGetValue("CreatedBy", out var createdBy) && createdBy != null)
         {
             if (createdBy is Guid guid)
                 return guid.ToString("D");
 
             var text = createdBy.ToString();
-            if (!string.IsNullOrWhiteSpace(text))
+            if (!string.IsNullOrWhiteSpace(text) && !Guid.TryParse(text, out _))
                 return text;
         }
 

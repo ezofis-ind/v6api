@@ -17,4 +17,5 @@ public record AddCommentCommandResult(
     Guid CommentId,
     Guid WorkflowId,
     Guid WorkflowInstanceId,
-    string TableName);
+    string TableName,
+    bool Skipped = false);

@@ -14,15 +14,18 @@ public sealed class CheckAuthenticateCommandHandler : IRequestHandler<CheckAuthe
     private readonly IDbContextFactory<CatalogDbContext> _catalogFactory;
     private readonly IConfiguration _configuration;
     private readonly IDistributedCache _cache;
+    private readonly ILogger<CheckAuthenticateCommandHandler> _logger;
 
     public CheckAuthenticateCommandHandler(
         IDbContextFactory<CatalogDbContext> catalogFactory,
         IConfiguration configuration,
-        IDistributedCache cache)
+        IDistributedCache cache,
+        ILogger<CheckAuthenticateCommandHandler> logger)
     {
         _catalogFactory = catalogFactory;
         _configuration = configuration;
         _cache = cache;
+        _logger = logger;
     }
 
     public async Task<CheckAuthenticateResult> Handle(CheckAuthenticateCommand request, CancellationToken cancellationToken)
@@ -148,39 +151,45 @@ public sealed class CheckAuthenticateCommandHandler : IRequestHandler<CheckAuthe
         var htmlFile = @"HTMLFiles\OTP Alert.html";
         var container = _configuration["OtpTemplate:Container"] ?? "ezofis";
         var commonPath = _configuration["CommonPath"] ?? string.Empty;
-        var serverForOcr = (_configuration["ServerForOcr"] ?? string.Empty).ToLowerInvariant();
         var htmlBody = string.Empty;
 
-        if (string.IsNullOrWhiteSpace(commonPath))
-        {
-            string assetStorageConnection;
-            if (serverForOcr == "trial")
-            {
-                assetStorageConnection = _configuration["OtpTemplate:TrialAssetStorageConnection"]
-                    ?? throw new InvalidOperationException("OtpTemplate:TrialAssetStorageConnection is not configured.");
-            }
-            else
-            {
-                assetStorageConnection = _configuration["OtpTemplate:DefaultAssetStorageConnection"]
-                    ?? throw new InvalidOperationException("OtpTemplate:DefaultAssetStorageConnection is not configured.");
-            }
-
-            var blobServiceClient = new Azure.Storage.Blobs.BlobServiceClient(assetStorageConnection);
-            var containerClient = blobServiceClient.GetBlobContainerClient(container);
-            var blobClient = containerClient.GetBlobClient(htmlFile.Replace('\\', '/'));
-            var blobDownloadInfo = await blobClient.DownloadAsync(cancellationToken);
-            await using var content = blobDownloadInfo.Value.Content;
-            using var memoryStream = new MemoryStream();
-            await content.CopyToAsync(memoryStream, cancellationToken);
-            var buffer = memoryStream.ToArray();
-            if (buffer.Length > 0)
-                htmlBody = System.Text.Encoding.UTF8.GetString(buffer);
-        }
-        else
+        if (!string.IsNullOrWhiteSpace(commonPath))
         {
             var mapPath = Path.Combine(commonPath, htmlFile);
             if (File.Exists(mapPath))
                 htmlBody = await File.ReadAllTextAsync(mapPath, cancellationToken);
+        }
+        else
+        {
+            var assetStorageConnection = ResolveOtpAssetStorageConnection();
+            if (!string.IsNullOrWhiteSpace(assetStorageConnection))
+            {
+                try
+                {
+                    var blobServiceClient = new BlobServiceClient(assetStorageConnection);
+                    var containerClient = blobServiceClient.GetBlobContainerClient(container);
+                    var blobClient = containerClient.GetBlobClient(htmlFile.Replace('\\', '/'));
+                    var blobDownloadInfo = await blobClient.DownloadAsync(cancellationToken);
+                    await using var content = blobDownloadInfo.Value.Content;
+                    using var memoryStream = new MemoryStream();
+                    await content.CopyToAsync(memoryStream, cancellationToken);
+                    var buffer = memoryStream.ToArray();
+                    if (buffer.Length > 0)
+                        htmlBody = System.Text.Encoding.UTF8.GetString(buffer);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Could not load OTP HTML template from blob container {Container}; using built-in template",
+                        container);
+                }
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "OTP blob template not configured (OtpTemplate:DefaultAssetStorageConnection); using built-in template");
+            }
         }
 
         if (string.IsNullOrWhiteSpace(htmlBody))
@@ -200,5 +209,21 @@ public sealed class CheckAuthenticateCommandHandler : IRequestHandler<CheckAuthe
             .Replace("#TENANTLOGO#", _configuration["OtpTemplate:TenantLogoUrl"] ?? string.Empty, StringComparison.Ordinal);
 
         return htmlBody;
+    }
+
+    private string? ResolveOtpAssetStorageConnection()
+    {
+        var serverForOcr = (_configuration["ServerForOcr"] ?? string.Empty).ToLowerInvariant();
+        if (serverForOcr == "trial")
+        {
+            return _configuration["OtpTemplate:TrialAssetStorageConnection"]
+                ?? _configuration["OtpTemplate:DefaultAssetStorageConnection"]
+                ?? _configuration["EzofisBlobStorage:ConnectionString"]
+                ?? _configuration["WorkflowJsonStorage:Blob:ConnectionString"];
+        }
+
+        return _configuration["OtpTemplate:DefaultAssetStorageConnection"]
+            ?? _configuration["EzofisBlobStorage:ConnectionString"]
+            ?? _configuration["WorkflowJsonStorage:Blob:ConnectionString"];
     }
 }

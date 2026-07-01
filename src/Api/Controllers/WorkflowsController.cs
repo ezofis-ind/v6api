@@ -60,6 +60,7 @@ public sealed class WorkflowsController : ControllerBase
     private readonly IApAgentJobStatusService _apAgentJobStatus;
     private readonly IApAgentJobProgressService _apAgentJobProgress;
     private readonly IApAgentPythonJobClient _apAgentPythonJobClient;
+    private readonly IWorkflowAttachmentArchiveService _attachmentArchive;
 
     public WorkflowsController(
         IMediator mediator,
@@ -73,7 +74,8 @@ public sealed class WorkflowsController : ControllerBase
         IWorkflowEzfbFormDataLoader ezfbFormDataLoader,
         IApAgentJobStatusService apAgentJobStatus,
         IApAgentJobProgressService apAgentJobProgress,
-        IApAgentPythonJobClient apAgentPythonJobClient)
+        IApAgentPythonJobClient apAgentPythonJobClient,
+        IWorkflowAttachmentArchiveService attachmentArchive)
     {
         _mediator = mediator;
         _workflowSchemaService = workflowSchemaService;
@@ -87,6 +89,7 @@ public sealed class WorkflowsController : ControllerBase
         _apAgentJobStatus = apAgentJobStatus;
         _apAgentJobProgress = apAgentJobProgress;
         _apAgentPythonJobClient = apAgentPythonJobClient;
+        _attachmentArchive = attachmentArchive;
     }
 
     /// <summary>Apply workflow schema to current tenant database. Call this if workflow.Workflows is missing. Requires X-Tenant-Id. In Development, no auth required.</summary>
@@ -997,6 +1000,7 @@ public sealed class WorkflowsController : ControllerBase
     /// <summary>Add a comment to a workflow instance (stored in workflow-specific table).</summary>
     [HttpPost("{workflowId:guid}/instances/{instanceId:guid}/comments")]
     [ProducesResponseType(typeof(AddCommentCommandResult), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(AddCommentCommandResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> AddComment(Guid workflowId, Guid instanceId, [FromBody] AddCommentRequest request, CancellationToken cancellationToken)
     {
@@ -1004,6 +1008,8 @@ public sealed class WorkflowsController : ControllerBase
         {
             var command = new AddCommentCommand(workflowId, instanceId, request.Comments, request.StepInstanceId, request.ExternalCommentsBy, request.ShowTo);
             var result = await _mediator.Send(command, cancellationToken);
+            if (result.Skipped)
+                return Ok(result);
             return CreatedAtAction(nameof(AddComment), new { workflowId, instanceId }, result);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
@@ -1013,17 +1019,97 @@ public sealed class WorkflowsController : ControllerBase
         }
     }
 
-    /// <summary>Add an attachment to a workflow instance (stored in workflow-specific table).</summary>
+    private IEnumerable<KeyValuePair<string, string?>> EnumerateAttachmentFormFields()
+    {
+        foreach (var key in Request.Form.Keys)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            yield return new KeyValuePair<string, string?>(key, Request.Form[key].ToString());
+        }
+    }
+
+    /// <summary>
+    /// Upload and archive a workflow attachment: blob + repository item + processAddon + WorkflowAttachments.
+    /// Send multipart: file, repositoryId, metadata (JSON fields), optional transactionId.
+    /// </summary>
     [HttpPost("{workflowId:guid}/instances/{instanceId:guid}/attachments")]
+    [Consumes("multipart/form-data")]
+    [DisableRequestSizeLimit]
+    [RequestFormLimits(MultipartBodyLengthLimit = 104_857_600)]
+    [ProducesResponseType(typeof(WorkflowAttachmentArchiveResult), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UploadAttachmentArchive(
+        Guid workflowId,
+        Guid instanceId,
+        IFormFile? file,
+        [FromForm] Guid repositoryId,
+        [FromForm] int? transactionId,
+        [FromForm] string? metadata,
+        CancellationToken cancellationToken)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new { error = "file is required." });
+
+        if (repositoryId == Guid.Empty)
+            return BadRequest(new { error = "repositoryId is required." });
+
+        var tenantId = _tenantProvider.GetTenantId();
+        var userId = GetCurrentUserId();
+        if (tenantId is null || userId is null)
+            return BadRequest(new { error = "Tenant and authenticated user are required." });
+
+        try
+        {
+            var mergedMetadata = RepositoryFormMetadataCollector.ToMetadataJson(
+                RepositoryFormMetadataCollector.Collect(metadata, EnumerateAttachmentFormFields()));
+
+            await using var stream = file.OpenReadStream();
+            var result = await _attachmentArchive.UploadAsync(
+                tenantId.Value,
+                workflowId,
+                instanceId,
+                repositoryId,
+                stream,
+                file.FileName,
+                file.ContentType,
+                file.Length,
+                mergedMetadata,
+                transactionId,
+                userId.Value,
+                cancellationToken);
+
+            return CreatedAtAction(nameof(GetAttachments), new { workflowId, instanceId }, result);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("does not belong", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Link an already-uploaded file path to a workflow instance (no blob upload).</summary>
+    [HttpPost("{workflowId:guid}/instances/{instanceId:guid}/attachments/link")]
+    [Consumes("application/json")]
     [ProducesResponseType(typeof(AddAttachmentCommandResult), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> AddAttachment(Guid workflowId, Guid instanceId, [FromBody] AddAttachmentRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> AddAttachmentLink(Guid workflowId, Guid instanceId, [FromBody] AddAttachmentRequest request, CancellationToken cancellationToken)
     {
         try
         {
             var command = new AddAttachmentCommand(workflowId, instanceId, request.FileName, request.FilePath, request.FileSize, request.ContentType);
             var result = await _mediator.Send(command, cancellationToken);
-            return CreatedAtAction(nameof(AddAttachment), new { workflowId, instanceId }, result);
+            return CreatedAtAction(nameof(AddAttachmentLink), new { workflowId, instanceId }, result);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
             || ex.Message.Contains("does not belong", StringComparison.OrdinalIgnoreCase))
@@ -1366,6 +1452,34 @@ public sealed class WorkflowsController : ControllerBase
             submittedFormDataJson);
         var result = await _mediator.Send(command, cancellationToken);
         return Ok(result);
+    }
+
+    /// <summary>
+    /// Bulk move-next: pass comma-separated instance ids, activityId and review. No formData — moves tickets only.
+    /// </summary>
+    [HttpPost("instances/bulk-move-next")]
+    [ProducesResponseType(typeof(BulkMoveToNextStepCommandResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> BulkMoveToNextStep(
+        [FromBody] BulkMoveToNextStepRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var instanceIds = BulkMoveInstanceIdParser.Parse(request.InstanceId, request.InstanceIds);
+            var command = new BulkMoveToNextStepCommand(
+                instanceIds,
+                request.ActivityId,
+                request.Review,
+                request.Comments,
+                request.ActivityUserId);
+            var result = await _mediator.Send(command, cancellationToken);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     /// <summary>Perform a custom action on workflow (Approve, Reject, Hold, Resume, Cancel, etc.).</summary>
@@ -1887,6 +2001,15 @@ public record MoveToNextStepRequest(
         return (null, null);
     }
 }
+
+/// <summary>Bulk move-next: instanceId comma list (or instanceIds array), activityId, review. No formData.</summary>
+public record BulkMoveToNextStepRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("activityid")] string ActivityId,
+    string? Review = null,
+    string? Comments = null,
+    Guid? ActivityUserId = null,
+    [property: System.Text.Json.Serialization.JsonPropertyName("instanceId")] string? InstanceId = null,
+    IReadOnlyList<Guid>? InstanceIds = null);
 
 /// <summary>Request to perform a custom action on workflow.</summary>
 public record PerformActionRequest(

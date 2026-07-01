@@ -56,7 +56,7 @@ public sealed class UpdateWorkflowCommandHandler : IRequestHandler<UpdateWorkflo
         if (workflow == null || workflow.IsDeleted)
             return new UpdateWorkflowCommandResult(false);
 
-        if (request.WorkflowJson != null)
+        if (request.WorkflowJson != null || !string.IsNullOrWhiteSpace(request.WorkflowJsonRaw))
             return await HandleFullJsonUpdateAsync(workflow, request, userId, cancellationToken);
 
         workflow.Update(request.Name, request.Description, request.TriggerType, request.TriggerConfig, userId);
@@ -72,7 +72,16 @@ public sealed class UpdateWorkflowCommandHandler : IRequestHandler<UpdateWorkflo
         CancellationToken cancellationToken)
     {
         var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
-        var json = request.WorkflowJson!;
+
+        var json = request.WorkflowJson;
+        if (json == null && !string.IsNullOrWhiteSpace(request.WorkflowJsonRaw))
+        {
+            json = JsonSerializer.Deserialize<WorkflowJsonDto>(request.WorkflowJsonRaw, Deserialize)
+                ?? throw new InvalidOperationException("Invalid workflowJson payload.");
+        }
+
+        if (json == null)
+            throw new InvalidOperationException("workflowJson is required for a full designer update.");
 
         var workflowName = json.Settings?.General?.Name ?? request.Name ?? workflow.Name;
         if (string.IsNullOrWhiteSpace(workflowName))

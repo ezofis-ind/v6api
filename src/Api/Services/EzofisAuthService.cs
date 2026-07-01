@@ -66,18 +66,7 @@ public sealed class EzofisAuthService : IEzofisAuthService
             return new LoginRequiresTwoFactor(tempToken, tenantId, user.Id, (int)PendingLoginExpiry.TotalSeconds);
         }
 
-        var safeEmail = user.Email?.Trim();
-        if (string.IsNullOrWhiteSpace(safeEmail))
-            throw new InvalidOperationException("User email is missing.");
-
-        var safeDisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? safeEmail : user.DisplayName;
-        var safeRole = string.IsNullOrWhiteSpace(user.Role) ? "User" : user.Role;
-
-        return new LoginSuccess(
-            user.Id,
-            GenerateJwt(user.Id, safeEmail, safeDisplayName, safeRole, tenantId),
-            "Bearer",
-            (int)AccessTokenExpiry.TotalSeconds);
+        return BuildLoginSuccess(user, tenantId);
     }
 
     public async Task<LoginResult> CompleteTwoFactorAsync(string tempToken, string code, CancellationToken cancellationToken = default)
@@ -98,6 +87,43 @@ public sealed class EzofisAuthService : IEzofisAuthService
         if (user == null)
             throw new UnauthorizedAccessException("User not found.");
 
+        return BuildLoginSuccess(user, cached.TenantId);
+    }
+
+    public async Task<LoginResult> SocialLoginAsync(
+        string email,
+        string provider,
+        Guid tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            throw new ArgumentException("Email is required.");
+
+        if (string.IsNullOrWhiteSpace(provider))
+            throw new ArgumentException("Provider is required (google or microsoft).");
+
+        var normalizedProvider = NormalizeSocialProvider(provider);
+        if (normalizedProvider is null)
+            throw new ArgumentException("Provider must be google or microsoft.");
+
+        var user = await _userRepository.GetByEmailAsync(email.Trim(), cancellationToken);
+        if (user == null)
+            throw new UnauthorizedAccessException("Invalid email or provider.");
+
+        if (user.TenantId != tenantId)
+            throw new UnauthorizedAccessException("Invalid email or provider.");
+
+        if (IsEzofisPasswordUser(user))
+            throw new UnauthorizedAccessException("You should login with password.");
+
+        if (!MatchesSocialProvider(user, normalizedProvider))
+            throw new UnauthorizedAccessException($"You should login with {DescribeExpectedProvider(user)}.");
+
+        return BuildLoginSuccess(user, tenantId);
+    }
+
+    private LoginSuccess BuildLoginSuccess(SaaSApp.Users.Domain.Entities.User user, Guid tenantId)
+    {
         var safeEmail = user.Email?.Trim();
         if (string.IsNullOrWhiteSpace(safeEmail))
             throw new InvalidOperationException("User email is missing.");
@@ -107,9 +133,74 @@ public sealed class EzofisAuthService : IEzofisAuthService
 
         return new LoginSuccess(
             user.Id,
-            GenerateJwt(user.Id, safeEmail, safeDisplayName, safeRole, cached.TenantId),
+            GenerateJwt(user.Id, safeEmail, safeDisplayName, safeRole, tenantId),
             "Bearer",
             (int)AccessTokenExpiry.TotalSeconds);
+    }
+
+    private static string? NormalizeSocialProvider(string provider)
+    {
+        var value = provider.Trim();
+        if (value.Equals("google", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("GOOGLE", StringComparison.OrdinalIgnoreCase))
+            return "google";
+
+        if (value.Equals("microsoft", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("MICROSOFT", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("office365", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("Office365", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("OFFICE365", StringComparison.OrdinalIgnoreCase))
+            return "microsoft";
+
+        return null;
+    }
+
+    private static bool IsEzofisPasswordUser(SaaSApp.Users.Domain.Entities.User user)
+    {
+        var loginType = user.LoginType?.Trim();
+        var authStrategy = user.AuthStrategy?.Trim();
+
+        var isEzofisLoginType = string.IsNullOrWhiteSpace(loginType) ||
+            loginType.Equals("EZOFIS", StringComparison.OrdinalIgnoreCase) ||
+            loginType.Equals("Ezofis", StringComparison.OrdinalIgnoreCase);
+
+        var isEzofisStrategy = string.IsNullOrWhiteSpace(authStrategy) ||
+            authStrategy.Equals(SaaSApp.Users.Domain.Entities.User.AuthStrategyEzofis, StringComparison.OrdinalIgnoreCase);
+
+        return isEzofisLoginType && isEzofisStrategy;
+    }
+
+    private static bool MatchesSocialProvider(SaaSApp.Users.Domain.Entities.User user, string normalizedProvider)
+    {
+        var loginType = user.LoginType?.Trim() ?? string.Empty;
+        var authStrategy = user.AuthStrategy?.Trim() ?? string.Empty;
+
+        if (normalizedProvider == "google")
+        {
+            return loginType.Equals("GOOGLE", StringComparison.OrdinalIgnoreCase) ||
+                   loginType.Equals("Google", StringComparison.OrdinalIgnoreCase) ||
+                   authStrategy.Equals(SaaSApp.Users.Domain.Entities.User.AuthStrategyGoogle, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return loginType.Equals("MICROSOFT", StringComparison.OrdinalIgnoreCase) ||
+               loginType.Equals("Microsoft", StringComparison.OrdinalIgnoreCase) ||
+               loginType.Equals("OFFICE365", StringComparison.OrdinalIgnoreCase) ||
+               loginType.Equals("Office365", StringComparison.OrdinalIgnoreCase) ||
+               authStrategy.Equals(SaaSApp.Users.Domain.Entities.User.AuthStrategyOffice365, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string DescribeExpectedProvider(SaaSApp.Users.Domain.Entities.User user)
+    {
+        if (!string.IsNullOrWhiteSpace(user.LoginType))
+            return user.LoginType;
+
+        if (user.AuthStrategy?.Equals(SaaSApp.Users.Domain.Entities.User.AuthStrategyGoogle, StringComparison.OrdinalIgnoreCase) == true)
+            return "GOOGLE";
+
+        if (user.AuthStrategy?.Equals(SaaSApp.Users.Domain.Entities.User.AuthStrategyOffice365, StringComparison.OrdinalIgnoreCase) == true)
+            return "MICROSOFT";
+
+        return user.AuthStrategy ?? "social provider";
     }
 
     private string GenerateJwt(Guid userId, string email, string displayName, string role, Guid tenantId)

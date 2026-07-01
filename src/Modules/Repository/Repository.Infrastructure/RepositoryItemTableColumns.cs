@@ -29,4 +29,20 @@ internal static class RepositoryItemTableColumns
 
     public static bool Has(HashSet<string> columns, string name) =>
         columns.Contains(name);
+
+    /// <summary>Returns the exact table column name for a case-insensitive match.</summary>
+    public static bool TryGetCanonicalName(HashSet<string> columns, string name, out string canonical)
+    {
+        foreach (var col in columns)
+        {
+            if (!string.Equals(col, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            canonical = col;
+            return true;
+        }
+
+        canonical = string.Empty;
+        return false;
+    }
 }

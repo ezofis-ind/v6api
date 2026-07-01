@@ -191,6 +191,205 @@ public sealed class FormEntryService : IFormEntryService
             : new FormEntryGetResult(FormEntryGetStatus.Found, entries);
     }
 
+    public async Task<FormEntryAllResult> ListEntriesAsync(
+        string formId,
+        FormEntryAllRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(formId))
+            return new FormEntryAllResult(FormEntryGetStatus.NotFound, formId, null, null);
+
+        var normalizedFormId = FormIdNaming.NormalizeFormId(formId);
+        var connectionString = _tenantContext.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        if (await LoadFormMetadataAsync(connection, normalizedFormId, cancellationToken) == null)
+            return new FormEntryAllResult(FormEntryGetStatus.NotFound, normalizedFormId, null, null);
+
+        var tableSuffix = FormIdNaming.GetEzfbTableSuffix(normalizedFormId);
+        var tableName = $"ezfb_{tableSuffix}_items";
+        if (!await EzfbTableExistsAsync(connection, tableName, cancellationToken))
+            return new FormEntryAllResult(FormEntryGetStatus.NotFound, normalizedFormId, null, null);
+
+        var ezfbColumns = await LoadTableColumnsAsync(connection, tableName, cancellationToken);
+        if (ezfbColumns.Count == 0)
+            return new FormEntryAllResult(FormEntryGetStatus.NotFound, normalizedFormId, null, null);
+
+        var page = request.CurrentPage <= 0 ? 1 : request.CurrentPage;
+        var pageSize = request.ItemsPerPage < 0 ? 0 : request.ItemsPerPage;
+        var skip = (page - 1) * (pageSize == 0 ? int.MaxValue : pageSize);
+        var mode = (request.Mode ?? "browse").Trim().ToLowerInvariant();
+        var includeDeleted = mode is "recyclebin" or "recycle" or "deleted";
+
+        var sortColumn = MapEntrySortColumn(request.SortBy?.Criteria, ezfbColumns);
+        var sortOrder = string.Equals(request.SortBy?.Order, "ASC", StringComparison.OrdinalIgnoreCase) ? "ASC" : "DESC";
+
+        var whereParts = new List<string>
+        {
+            includeDeleted ? "(isDeleted = 1)" : "(isDeleted = 0 OR isDeleted IS NULL)"
+        };
+        var parameters = new List<SqlParameter>();
+
+        foreach (var filter in (request.FilterBy ?? new List<FormAllFilterGroup>())
+                     .SelectMany(g => g.Filters ?? new List<FormAllFilter>()))
+        {
+            if (TryBuildEntryFilterCondition(filter, ezfbColumns, out var condition, out var filterParam))
+            {
+                whereParts.Add(condition);
+                if (filterParam != null)
+                    parameters.Add(filterParam);
+            }
+        }
+
+        var whereSql = string.Join(" AND ", whereParts);
+        var countSql = $"SELECT COUNT(1) FROM dbo.[{tableName}] WHERE {whereSql};";
+        var selectColumns = ezfbColumns
+            .Select(c => $"[{EscapeColumn(c)}]")
+            .ToList();
+        var selectSql = $"""
+            SELECT {string.Join(", ", selectColumns)}
+            FROM dbo.[{tableName}]
+            WHERE {whereSql}
+            ORDER BY {sortColumn} {sortOrder}
+            OFFSET @Skip ROWS
+            FETCH NEXT @Take ROWS ONLY;
+            """;
+
+        int totalItems;
+        await using (var countCmd = new SqlCommand(countSql, connection))
+        {
+            countCmd.Parameters.AddRange(parameters.Select(p => new SqlParameter(p.ParameterName, p.Value)).ToArray());
+            totalItems = Convert.ToInt32(await countCmd.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+        }
+
+        var entries = new List<Dictionary<string, object?>>();
+        await using (var listCmd = new SqlCommand(selectSql, connection))
+        {
+            listCmd.Parameters.AddRange(parameters.ToArray());
+            listCmd.Parameters.AddWithValue("@Skip", Math.Max(skip, 0));
+            listCmd.Parameters.AddWithValue("@Take", pageSize == 0 ? Math.Max(totalItems, 1) : pageSize);
+            await using var reader = await listCmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var name = reader.GetName(i);
+                    row[name] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                }
+
+                entries.Add(row);
+            }
+        }
+
+        if (request.IncludeFormJson && entries.Count > 0)
+        {
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (!entries[i].TryGetValue("itemId", out var itemObj) || itemObj == null)
+                    continue;
+
+                var entryId = Convert.ToInt32(itemObj, CultureInfo.InvariantCulture);
+                var formDataJson = await _formDataLoader.LoadFormDataJsonAsync(normalizedFormId, entryId, cancellationToken);
+                if (string.IsNullOrWhiteSpace(formDataJson))
+                    continue;
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(formDataJson);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var prop in doc.RootElement.EnumerateObject())
+                            entries[i][prop.Name] = JsonElementToObject(prop.Value);
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogDebug(ex, "Could not merge jsonId form data for entry {EntryId}.", entryId);
+                }
+            }
+        }
+
+        return new FormEntryAllResult(
+            FormEntryGetStatus.Found,
+            normalizedFormId,
+            entries,
+            new FormAllMeta(page, pageSize, totalItems));
+    }
+
+    private static string MapEntrySortColumn(string? criteria, IReadOnlySet<string> ezfbColumns)
+    {
+        var c = (criteria ?? "modifiedAt").Trim();
+        if (ezfbColumns.Contains(c))
+            return $"[{EscapeColumn(c)}]";
+
+        var lower = c.ToLowerInvariant();
+        return lower switch
+        {
+            "itemid" or "id" when ezfbColumns.Contains("itemId") => "[itemId]",
+            "createdat" when ezfbColumns.Contains("createdAt") => "[createdAt]",
+            "modifiedat" when ezfbColumns.Contains("modifiedAt") => "[modifiedAt]",
+            _ => ezfbColumns.Contains("modifiedAt")
+                ? "[modifiedAt]"
+                : "[itemId]"
+        };
+    }
+
+    private static bool TryBuildEntryFilterCondition(
+        FormAllFilter filter,
+        IReadOnlySet<string> ezfbColumns,
+        out string conditionSql,
+        out SqlParameter? parameter)
+    {
+        conditionSql = string.Empty;
+        parameter = null;
+        if (filter == null || string.IsNullOrWhiteSpace(filter.Criteria) || string.IsNullOrWhiteSpace(filter.Condition))
+            return false;
+
+        var criteria = filter.Criteria.Trim();
+        string? column = null;
+        foreach (var col in ezfbColumns)
+        {
+            if (string.Equals(col, criteria, StringComparison.OrdinalIgnoreCase))
+            {
+                column = col;
+                break;
+            }
+        }
+
+        if (column == null)
+            return false;
+
+        var escaped = EscapeColumn(column);
+        var paramName = $"@e_{Math.Abs((filter.Criteria + filter.Condition + filter.Value).GetHashCode())}";
+        var cond = filter.Condition.Trim().ToLowerInvariant();
+        if (cond is "contains" or "like")
+        {
+            conditionSql = $"[{escaped}] LIKE {paramName}";
+            parameter = new SqlParameter(paramName, $"%{filter.Value ?? string.Empty}%");
+            return true;
+        }
+
+        if (cond is "eq" or "=" or "equal")
+        {
+            conditionSql = $"[{escaped}] = {paramName}";
+            parameter = new SqlParameter(paramName, filter.Value ?? string.Empty);
+            return true;
+        }
+
+        if (cond is "neq" or "!=" or "notequal")
+        {
+            conditionSql = $"[{escaped}] <> {paramName}";
+            parameter = new SqlParameter(paramName, filter.Value ?? string.Empty);
+            return true;
+        }
+
+        return false;
+    }
+
     private static FormEntryUpsertRequest ParseUpsertRequest(JsonElement body)
     {
         if (body.ValueKind != JsonValueKind.Object)
@@ -634,7 +833,7 @@ public sealed class FormEntryService : IFormEntryService
                 return true;
             }
 
-            if (TryToEzfbColumnName(row.JsonId, out var ezfbCol)
+            if (EzfbColumnNaming.TryToColumnName(row.JsonId, out var ezfbCol)
                 && string.Equals(ezfbCol, key, StringComparison.OrdinalIgnoreCase))
             {
                 control = row;
@@ -645,29 +844,7 @@ public sealed class FormEntryService : IFormEntryService
         return false;
     }
 
-    private static string EscapeColumn(string column) => column.Replace("]", "]]");
-
-    private static string ToEzfbColumnName(string jsonId)
-    {
-        var safe = new string(jsonId.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
-        if (string.IsNullOrEmpty(safe))
-            throw new ArgumentException($"Invalid jsonId for ezfb column: {jsonId}");
-        return safe;
-    }
-
-    private static bool TryToEzfbColumnName(string jsonId, out string column)
-    {
-        try
-        {
-            column = ToEzfbColumnName(jsonId);
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            column = string.Empty;
-            return false;
-        }
-    }
+    private static string EscapeColumn(string column) => column.Replace("]", "]]", StringComparison.Ordinal);
 
     private static bool TryResolveEzfbColumn(string jsonId, IReadOnlySet<string> ezfbColumns, out string column)
     {
@@ -682,13 +859,13 @@ public sealed class FormEntryService : IFormEntryService
             return true;
         }
 
-        if (TryToEzfbColumnName(trimmed, out var fromJsonId) && ezfbColumns.Contains(fromJsonId))
+        if (EzfbColumnNaming.TryToColumnName(trimmed, out var fromJsonId) && ezfbColumns.Contains(fromJsonId))
         {
             column = fromJsonId;
             return true;
         }
 
-        if (TryToEzfbColumnName(trimmed, out var baseName)
+        if (EzfbColumnNaming.TryToColumnName(trimmed, out var baseName)
             && baseName.Length > 0
             && char.IsDigit(baseName[0]))
         {

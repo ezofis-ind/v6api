@@ -37,7 +37,11 @@ public sealed class RepositorySchemaEnsuringMiddleware
 
         if (!AppliedTenants.ContainsKey(tenantId.Value))
         {
-            await schemaService.ApplyBaseSchemaAsync(conn, context.RequestAborted);
+            await TenantSchemaEnsureHelper.EnsureRepositorySchemaAsync(
+                tenantId.Value,
+                conn,
+                () => schemaService.ApplyBaseSchemaAsync(conn, context.RequestAborted),
+                context.RequestAborted);
             AppliedTenants.TryAdd(tenantId.Value, 0);
         }
 

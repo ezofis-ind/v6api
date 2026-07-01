@@ -375,7 +375,8 @@ public sealed class RepositoriesController : ControllerBase
     }
 
     /// <summary>
-    /// Upload with archive folder layout (multipart): ezts{tenantId}/archive/{repositoryName}/{level names}/{file}.
+    /// Upload with archive folder layout (multipart): ezts{tenantId}/archive/{repositoryName}/{folder fields}/{uploadedFileName}.ext
+    /// Folder levels from fields with IncludeInFolderStructure; file name from highest-level metadata above folders (e.g. PoNumber).
     /// Requires repository fields with IncludeInFolderStructure; metadata JSON required for mandatory levels.
     /// </summary>
     [HttpPost("/api/repositories/{id:guid}/items/upload-archive")]

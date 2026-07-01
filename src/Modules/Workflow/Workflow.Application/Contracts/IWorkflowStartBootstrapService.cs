@@ -23,6 +23,7 @@ public sealed record WorkflowStartBootstrapRequest(
     string? AttachmentContentType);
 
 public sealed record WorkflowStartBootstrapResult(
+    int? FirstTransactionId,
     int? CurrentTransactionId,
     int? FormEntryId,
     Guid? ApAgentStepInstanceId,
