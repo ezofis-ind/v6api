@@ -1,5 +1,6 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
+using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 using SaaSApp.Users.Domain.Entities;
 
 namespace SaaSApp.Users.Application.Users.Queries.GetCurrentUser;
@@ -7,17 +8,41 @@ namespace SaaSApp.Users.Application.Users.Queries.GetCurrentUser;
 public sealed class GetCurrentUserQueryHandler : IRequestHandler<GetCurrentUserQuery, CurrentUserDetailResult?>
 {
     private readonly IUserRepository _userRepository;
+    private readonly IRoleRepository _roleRepository;
+    private readonly IPermissionCategoryRepository _categoryRepository;
 
-    public GetCurrentUserQueryHandler(IUserRepository userRepository) =>
+    public GetCurrentUserQueryHandler(
+        IUserRepository userRepository,
+        IRoleRepository roleRepository,
+        IPermissionCategoryRepository categoryRepository)
+    {
         _userRepository = userRepository;
+        _roleRepository = roleRepository;
+        _categoryRepository = categoryRepository;
+    }
 
     public async Task<CurrentUserDetailResult?> Handle(GetCurrentUserQuery request, CancellationToken cancellationToken)
     {
         var user = await _userRepository.GetByIdAsync(request.UserId, cancellationToken);
-        return user == null ? null : Map(user);
+        if (user == null)
+            return null;
+
+        var permissionKeys = await _roleRepository.ListPermissionKeysForUserAsync(
+            request.UserId,
+            user.Role,
+            cancellationToken);
+        var (permissionCount, groupedPermissions) = await UserPermissionMapper.MapGroupedAsync(
+            permissionKeys,
+            _categoryRepository,
+            cancellationToken);
+
+        return Map(user, permissionCount, groupedPermissions);
     }
 
-    private static CurrentUserDetailResult Map(User user) =>
+    private static CurrentUserDetailResult Map(
+        User user,
+        int permissionCount,
+        IReadOnlyList<PermissionCategoryRow> permissionKeys) =>
         new(
             user.Id,
             user.TenantId,
@@ -50,5 +75,7 @@ public sealed class GetCurrentUserQueryHandler : IRequestHandler<GetCurrentUserQ
             user.UiPreference,
             user.ModifiedAtUtc,
             user.CreatedBy,
-            user.ModifiedBy);
+            user.ModifiedBy,
+            permissionCount,
+            permissionKeys);
 }

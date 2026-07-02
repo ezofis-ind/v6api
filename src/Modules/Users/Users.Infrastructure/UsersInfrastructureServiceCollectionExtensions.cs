@@ -48,6 +48,10 @@ public static class UsersInfrastructureServiceCollectionExtensions
         });
 
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRoleRepository, RoleRepository>();
+        services.AddScoped<IGroupRepository, GroupRepository>();
+        services.AddScoped<IMenuRepository, MenuRepository>();
+        services.AddScoped<IPermissionCategoryRepository, PermissionCategoryRepository>();
         services.AddScoped<IUnitOfWork, UsersUnitOfWork>();
         services.AddScoped<DomainEventDispatcher>();
         services.AddScoped<IWelcomeEmailJobClient, WelcomeEmailJobClient>();

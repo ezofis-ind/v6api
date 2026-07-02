@@ -41,6 +41,32 @@ public sealed class UserRepository : IUserRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<int> CountExistingByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+            return 0;
+
+        return await _context.Users
+            .AsNoTracking()
+            .CountAsync(u => ids.Contains(u.Id), cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<string>> RenameRoleForUsersAsync(
+        string oldRoleName,
+        string newRoleName,
+        CancellationToken cancellationToken = default)
+    {
+        var oldNormalized = oldRoleName.Trim().ToLowerInvariant();
+        var users = await _context.Users
+            .Where(u => u.Role.ToLower() == oldNormalized)
+            .ToListAsync(cancellationToken);
+
+        foreach (var user in users)
+            user.Update(role: newRoleName);
+
+        return users.Select(u => u.Email).ToList();
+    }
+
     public void Update(User user)
     {
         _context.Users.Update(user);

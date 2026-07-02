@@ -1,4 +1,5 @@
 using MediatR;
+using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 
 namespace SaaSApp.Users.Application.Users.Queries.GetCurrentUser;
 
@@ -38,4 +39,6 @@ public record CurrentUserDetailResult(
     string? UiPreference,
     DateTime? ModifiedAtUtc,
     Guid? CreatedBy,
-    Guid? ModifiedBy);
+    Guid? ModifiedBy,
+    int PermissionCount,
+    IReadOnlyList<PermissionCategoryRow> PermissionKeys);

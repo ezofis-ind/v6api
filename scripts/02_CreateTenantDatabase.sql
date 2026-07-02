@@ -95,6 +95,204 @@ BEGIN
 END
 GO
 
+-- Custom roles tables
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Roles' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[Roles] (
+        [Id] UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+        [TenantId] UNIQUEIDENTIFIER NOT NULL,
+        [Name] NVARCHAR(128) NOT NULL,
+        [Description] NVARCHAR(512) NULL,
+        [CreatedAtUtc] DATETIME2 NOT NULL,
+        [IsDeleted] BIT NOT NULL DEFAULT 0,
+        CONSTRAINT [IX_Roles_TenantId_Name] UNIQUE ([TenantId], [Name])
+    );
+    PRINT '✓ Roles table created';
+END
+ELSE
+BEGIN
+    PRINT '✓ Roles table already exists';
+    IF COL_LENGTH('users.Roles', 'Name') IS NULL
+    BEGIN
+        ALTER TABLE [users].[Roles] ADD [Name] NVARCHAR(128) NOT NULL CONSTRAINT [DF_Roles_Name] DEFAULT '';
+        IF COL_LENGTH('users.RolePermissions', 'RoleName') IS NOT NULL
+        BEGIN
+            UPDATE r SET r.Name = src.RoleName
+            FROM [users].[Roles] r
+            INNER JOIN (
+                SELECT RoleId, MIN(RoleName) AS RoleName
+                FROM [users].[RolePermissions]
+                WHERE RoleName <> ''
+                GROUP BY RoleId
+            ) src ON src.RoleId = r.Id
+            WHERE r.Name = '';
+        END
+        ALTER TABLE [users].[Roles] DROP CONSTRAINT [DF_Roles_Name];
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Roles_TenantId_Name' AND object_id = OBJECT_ID('users.Roles'))
+            ALTER TABLE [users].[Roles] ADD CONSTRAINT [IX_Roles_TenantId_Name] UNIQUE ([TenantId], [Name]);
+        PRINT '✓ Roles.Name column added';
+    END
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserRoles' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[UserRoles] (
+        [RoleId] UNIQUEIDENTIFIER NOT NULL,
+        [UserId] UNIQUEIDENTIFIER NOT NULL,
+        [TenantId] UNIQUEIDENTIFIER NOT NULL,
+        CONSTRAINT [PK_UserRoles] PRIMARY KEY ([RoleId], [UserId]),
+        CONSTRAINT [FK_UserRoles_Roles_RoleId] FOREIGN KEY ([RoleId]) REFERENCES [users].[Roles]([Id]) ON DELETE CASCADE
+    );
+    PRINT '✓ UserRoles table created';
+END
+ELSE
+BEGIN
+    PRINT '✓ UserRoles table already exists';
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'RolePermissions' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[RolePermissions] (
+        [RoleId] UNIQUEIDENTIFIER NOT NULL,
+        [PermissionKey] NVARCHAR(128) NOT NULL,
+        [TenantId] UNIQUEIDENTIFIER NOT NULL,
+        CONSTRAINT [PK_RolePermissions] PRIMARY KEY ([RoleId], [PermissionKey]),
+        CONSTRAINT [FK_RolePermissions_Roles_RoleId] FOREIGN KEY ([RoleId]) REFERENCES [users].[Roles]([Id]) ON DELETE CASCADE
+    );
+    PRINT '✓ RolePermissions table created';
+END
+ELSE
+BEGIN
+    PRINT '✓ RolePermissions table already exists';
+    IF COL_LENGTH('users.RolePermissions', 'RoleName') IS NOT NULL
+    BEGIN
+        IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RolePermissions_TenantId_RoleName' AND object_id = OBJECT_ID('users.RolePermissions'))
+            DROP INDEX [IX_RolePermissions_TenantId_RoleName] ON [users].[RolePermissions];
+        ALTER TABLE [users].[RolePermissions] DROP COLUMN [RoleName];
+        PRINT '✓ RolePermissions.RoleName column removed';
+    END
+END
+GO
+
+-- User groups tables
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Groups' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[Groups] (
+        [Id] UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+        [TenantId] UNIQUEIDENTIFIER NOT NULL,
+        [Name] NVARCHAR(128) NOT NULL,
+        [Description] NVARCHAR(512) NULL,
+        [CreatedAtUtc] DATETIME2 NOT NULL,
+        [IsDeleted] BIT NOT NULL DEFAULT 0,
+        CONSTRAINT [IX_Groups_TenantId_Name] UNIQUE ([TenantId], [Name])
+    );
+    PRINT '✓ Groups table created';
+END
+ELSE
+BEGIN
+    PRINT '✓ Groups table already exists';
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserGroups' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[UserGroups] (
+        [GroupId] UNIQUEIDENTIFIER NOT NULL,
+        [UserId] UNIQUEIDENTIFIER NOT NULL,
+        [TenantId] UNIQUEIDENTIFIER NOT NULL,
+        CONSTRAINT [PK_UserGroups] PRIMARY KEY ([GroupId], [UserId]),
+        CONSTRAINT [FK_UserGroups_Groups_GroupId] FOREIGN KEY ([GroupId]) REFERENCES [users].[Groups]([Id]) ON DELETE CASCADE
+    );
+    PRINT '✓ UserGroups table created';
+END
+ELSE
+BEGIN
+    PRINT '✓ UserGroups table already exists';
+END
+GO
+
+-- Navigation menus
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Menus' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[Menus] (
+        [Id] UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+        [Key] NVARCHAR(64) NOT NULL,
+        [Label] NVARCHAR(128) NOT NULL,
+        [RoutePath] NVARCHAR(256) NOT NULL,
+        [SortOrder] INT NOT NULL,
+        [IsSystem] BIT NOT NULL DEFAULT 0,
+        [IsDeleted] BIT NOT NULL DEFAULT 0,
+        [CreatedAtUtc] DATETIME2 NOT NULL,
+        CONSTRAINT [IX_Menus_Key] UNIQUE ([Key])
+    );
+    PRINT '✓ Menus table created';
+
+    INSERT INTO [users].[Menus] ([Id], [Key], [Label], [RoutePath], [SortOrder], [IsSystem], [IsDeleted], [CreatedAtUtc]) VALUES
+        ('b2000001-0000-4000-8000-000000000001', 'dashboard', 'Dashboard', '/dashboard', 1, 1, 0, '2025-07-02T00:00:00'),
+        ('b2000001-0000-4000-8000-000000000002', 'inbox', 'Inbox', '/inbox', 2, 1, 0, '2025-07-02T00:00:00'),
+        ('b2000001-0000-4000-8000-000000000003', 'ocr-review', 'OCR.Review', '/ocr-review', 3, 1, 0, '2025-07-02T00:00:00'),
+        ('b2000001-0000-4000-8000-000000000004', 'processed-invoices', 'Processed Invoices', '/processed-invoices', 4, 1, 0, '2025-07-02T00:00:00'),
+        ('b2000001-0000-4000-8000-000000000005', 'approval-queue', 'Approval Queue', '/approval-queue', 5, 1, 0, '2025-07-02T00:00:00'),
+        ('b2000001-0000-4000-8000-000000000006', 'vendors', 'Vendors', '/vendors', 6, 1, 0, '2025-07-02T00:00:00');
+    PRINT '✓ Menus seed data inserted';
+END
+ELSE
+BEGIN
+    PRINT '✓ Menus table already exists';
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'RoleMenus' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[RoleMenus] (
+        [RoleId] UNIQUEIDENTIFIER NOT NULL,
+        [MenuId] UNIQUEIDENTIFIER NOT NULL,
+        [TenantId] UNIQUEIDENTIFIER NOT NULL,
+        [IsDefaultLanding] BIT NOT NULL DEFAULT 0,
+        CONSTRAINT [PK_RoleMenus] PRIMARY KEY ([RoleId], [MenuId]),
+        CONSTRAINT [FK_RoleMenus_Roles_RoleId] FOREIGN KEY ([RoleId]) REFERENCES [users].[Roles]([Id]) ON DELETE CASCADE,
+        CONSTRAINT [FK_RoleMenus_Menus_MenuId] FOREIGN KEY ([MenuId]) REFERENCES [users].[Menus]([Id]) ON DELETE CASCADE
+    );
+    PRINT '✓ RoleMenus table created';
+END
+ELSE
+BEGIN
+    PRINT '✓ RoleMenus table already exists';
+END
+GO
+
+-- Permission categories (system-defined matrix rows)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PermissionCategories' AND schema_id = SCHEMA_ID('users'))
+BEGIN
+    CREATE TABLE [users].[PermissionCategories] (
+        [Id] UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+        [Key] NVARCHAR(64) NOT NULL,
+        [Name] NVARCHAR(128) NOT NULL,
+        [SortOrder] INT NOT NULL,
+        [IsActive] BIT NOT NULL DEFAULT 1,
+        CONSTRAINT [IX_PermissionCategories_Key] UNIQUE ([Key])
+    );
+    PRINT '✓ PermissionCategories table created';
+
+    INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive]) VALUES
+        ('a1000001-0000-4000-8000-000000000001', 'dashboard', 'Dashboard', 1, 1),
+        ('a1000001-0000-4000-8000-000000000002', 'invoices', 'Invoices', 2, 1),
+        ('a1000001-0000-4000-8000-000000000003', 'ocr-document-processing', 'OCR / Document Processing', 3, 1),
+        ('a1000001-0000-4000-8000-000000000004', 'workflow-approvals', 'Workflow & Approvals', 4, 1),
+        ('a1000001-0000-4000-8000-000000000005', 'reports-analytics', 'Reports & Analytics', 5, 1),
+        ('a1000001-0000-4000-8000-000000000006', 'user-management', 'User Management', 6, 1),
+        ('a1000001-0000-4000-8000-000000000007', 'integrations', 'Integrations', 7, 1),
+        ('a1000001-0000-4000-8000-000000000008', 'system-settings', 'System Settings', 8, 1);
+    PRINT '✓ PermissionCategories seed data inserted';
+END
+ELSE
+BEGIN
+    PRINT '✓ PermissionCategories table already exists';
+END
+GO
+
 -- EF Migrations History for Users
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = '__EFMigrationsHistory' AND schema_id = SCHEMA_ID('users'))
 BEGIN
@@ -111,6 +309,33 @@ END
 ELSE
 BEGIN
     PRINT '✓ Users EF Migrations History already exists';
+END
+GO
+
+IF EXISTS (SELECT * FROM sys.tables WHERE name = '__EFMigrationsHistory' AND schema_id = SCHEMA_ID('users'))
+   AND NOT EXISTS (SELECT 1 FROM [users].[__EFMigrationsHistory] WHERE [MigrationId] = '20250701140000_AddCustomRoles')
+BEGIN
+    INSERT INTO [users].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES ('20250701140000_AddCustomRoles', '8.0.11');
+    PRINT '✓ AddCustomRoles migration entry added';
+END
+GO
+
+IF EXISTS (SELECT * FROM sys.tables WHERE name = '__EFMigrationsHistory' AND schema_id = SCHEMA_ID('users'))
+   AND NOT EXISTS (SELECT 1 FROM [users].[__EFMigrationsHistory] WHERE [MigrationId] = '20250701150000_AddPermissionCategories')
+BEGIN
+    INSERT INTO [users].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES ('20250701150000_AddPermissionCategories', '8.0.11');
+    PRINT '✓ AddPermissionCategories migration entry added';
+END
+GO
+
+IF EXISTS (SELECT * FROM sys.tables WHERE name = '__EFMigrationsHistory' AND schema_id = SCHEMA_ID('users'))
+   AND NOT EXISTS (SELECT 1 FROM [users].[__EFMigrationsHistory] WHERE [MigrationId] = '20250702110000_AddMenus')
+BEGIN
+    INSERT INTO [users].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES ('20250702110000_AddMenus', '8.0.11');
+    PRINT '✓ AddMenus migration entry added';
 END
 GO
 

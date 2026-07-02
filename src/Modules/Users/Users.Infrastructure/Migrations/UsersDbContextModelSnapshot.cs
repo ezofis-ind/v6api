@@ -23,6 +23,183 @@ namespace SaaSApp.Users.Infrastructure.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.PermissionCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Key")
+                        .IsUnique();
+
+                    b.ToTable("PermissionCategories", "users");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000001"),
+                            IsActive = true,
+                            Key = "dashboard",
+                            Name = "Dashboard",
+                            SortOrder = 1
+                        },
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000002"),
+                            IsActive = true,
+                            Key = "invoices",
+                            Name = "Invoices",
+                            SortOrder = 2
+                        },
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000003"),
+                            IsActive = true,
+                            Key = "ocr-document-processing",
+                            Name = "OCR / Document Processing",
+                            SortOrder = 3
+                        },
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000004"),
+                            IsActive = true,
+                            Key = "workflow-approvals",
+                            Name = "Workflow & Approvals",
+                            SortOrder = 4
+                        },
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000005"),
+                            IsActive = true,
+                            Key = "reports-analytics",
+                            Name = "Reports & Analytics",
+                            SortOrder = 5
+                        },
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000006"),
+                            IsActive = true,
+                            Key = "user-management",
+                            Name = "User Management",
+                            SortOrder = 6
+                        },
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000007"),
+                            IsActive = true,
+                            Key = "integrations",
+                            Name = "Integrations",
+                            SortOrder = 7
+                        },
+                        new
+                        {
+                            Id = new Guid("a1000001-0000-4000-8000-000000000008"),
+                            IsActive = true,
+                            Key = "system-settings",
+                            Name = "System Settings",
+                            SortOrder = 8
+                        });
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.Role", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("Roles", "users");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.Group", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("Groups", "users");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.RolePermission", b =>
+                {
+                    b.Property<Guid>("RoleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PermissionKey")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("RoleId", "PermissionKey");
+
+                    b.ToTable("RolePermissions", "users");
+                });
+
             modelBuilder.Entity("SaaSApp.Users.Domain.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -165,6 +342,83 @@ namespace SaaSApp.Users.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Users", "users");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.UserRole", b =>
+                {
+                    b.Property<Guid>("RoleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("RoleId", "UserId");
+
+                    b.ToTable("UserRoles", "users");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.UserGroup", b =>
+                {
+                    b.Property<Guid>("GroupId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("GroupId", "UserId");
+
+                    b.ToTable("UserGroups", "users");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.RolePermission", b =>
+                {
+                    b.HasOne("SaaSApp.Users.Domain.Entities.Role", "Role")
+                        .WithMany("Permissions")
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Role");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.UserRole", b =>
+                {
+                    b.HasOne("SaaSApp.Users.Domain.Entities.Role", "Role")
+                        .WithMany("UserRoles")
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Role");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.UserGroup", b =>
+                {
+                    b.HasOne("SaaSApp.Users.Domain.Entities.Group", "Group")
+                        .WithMany("UserGroups")
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Group");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.Group", b =>
+                {
+                    b.Navigation("UserGroups");
+                });
+
+            modelBuilder.Entity("SaaSApp.Users.Domain.Entities.Role", b =>
+                {
+                    b.Navigation("Permissions");
+
+                    b.Navigation("UserRoles");
                 });
 #pragma warning restore 612, 618
         }
