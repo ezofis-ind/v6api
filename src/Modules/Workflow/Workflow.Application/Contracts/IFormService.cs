@@ -29,4 +29,7 @@ public interface IFormService
     Task<FormUpdateResult> UpdateFormAsync(string formId, FormJsonDto formJson, string rawJson, CancellationToken cancellationToken = default);
 
     Task<FormDeleteResult> DeleteFormAsync(string formId, CancellationToken cancellationToken = default);
+
+    /// <summary>Get wFormControl rows for a form (field definitions keyed by jsonId).</summary>
+    Task<FormControlsResult?> GetControlsAsync(string formId, CancellationToken cancellationToken = default);
 }

@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SaaSApp.Api.Middleware;
 using SaaSApp.MultiTenancy;
 using SaaSApp.Repository.Application;
 using SaaSApp.Repository.Application.Contracts;
@@ -22,6 +23,9 @@ public sealed class RepositoriesController : ControllerBase
     private readonly IRepositoryArchiveFileUploadService _archiveUpload;
     private readonly IRepositoryStorageSeedService _storageSeed;
     private readonly IRepositoryItemActivityService _itemActivity;
+    private readonly IRepositoryItemShareService _itemShares;
+    private readonly ITenantConnectionStringResolver _connectionResolver;
+    private readonly ITenantConnectionProvider _connectionProvider;
 
     public RepositoriesController(
         ITenantProvider tenantProvider,
@@ -31,7 +35,10 @@ public sealed class RepositoriesController : ControllerBase
         IRepositoryFileUploadService fileUpload,
         IRepositoryArchiveFileUploadService archiveUpload,
         IRepositoryStorageSeedService storageSeed,
-        IRepositoryItemActivityService itemActivity)
+        IRepositoryItemActivityService itemActivity,
+        IRepositoryItemShareService itemShares,
+        ITenantConnectionStringResolver connectionResolver,
+        ITenantConnectionProvider connectionProvider)
     {
         _tenantProvider = tenantProvider;
         _provisioner = provisioner;
@@ -41,6 +48,9 @@ public sealed class RepositoriesController : ControllerBase
         _archiveUpload = archiveUpload;
         _storageSeed = storageSeed;
         _itemActivity = itemActivity;
+        _itemShares = itemShares;
+        _connectionResolver = connectionResolver;
+        _connectionProvider = connectionProvider;
     }
 
     /// <summary>Seed default storage providers (EZOFIS, GCP, ONEDRIVE) for current tenant.</summary>
@@ -95,10 +105,17 @@ public sealed class RepositoriesController : ControllerBase
     }
 
     [HttpGet("/api/repositories/{id:guid}")]
-    public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetById(
+        Guid id,
+        [FromQuery] string? shareToken,
+        [FromQuery] string? sharedtoken,
+        CancellationToken cancellationToken)
     {
-        var tenantId = RequireTenantId();
-        var repo = await _provisioner.GetRepositoryAsync(id, tenantId, cancellationToken);
+        if (await EnsureShareContextAsync(cancellationToken) is { } shareError)
+            return shareError;
+
+        var (repoId, _, tenantId) = ResolveItemAccess(id, Guid.Empty);
+        var repo = await _provisioner.GetRepositoryAsync(repoId, tenantId, cancellationToken);
         return repo == null ? NotFound() : Ok(repo);
     }
 
@@ -247,27 +264,137 @@ public sealed class RepositoriesController : ControllerBase
     }
 
     [HttpGet("/api/repositories/{id:guid}/items/{itemId:guid}")]
-    public async Task<IActionResult> GetItem(Guid id, Guid itemId, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetItem(
+        Guid id,
+        Guid itemId,
+        [FromQuery] string? shareToken,
+        [FromQuery] string? sharedtoken,
+        CancellationToken cancellationToken)
     {
-        var tenantId = RequireTenantId();
-        var item = await _items.GetItemAsync(id, tenantId, itemId, cancellationToken);
-        return item == null ? NotFound() : Ok(item);
+        if (await EnsureShareContextAsync(cancellationToken) is { } shareError)
+            return shareError;
+
+        var (repoId, resolvedItemId, tenantId) = ResolveItemAccess(id, itemId);
+        try
+        {
+            var item = await _items.GetItemAsync(repoId, tenantId, resolvedItemId, cancellationToken);
+            return item == null ? NotFound() : Ok(item);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
     }
 
     /// <summary>Structured document workspace (panels + line items) for filename click detail view.</summary>
     [HttpGet("/api/repositories/{id:guid}/items/{itemId:guid}/workspace")]
-    public async Task<IActionResult> GetItemWorkspace(Guid id, Guid itemId, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetItemWorkspace(
+        Guid id,
+        Guid itemId,
+        [FromQuery] string? shareToken,
+        [FromQuery] string? sharedtoken,
+        CancellationToken cancellationToken)
+    {
+        if (await EnsureShareContextAsync(cancellationToken) is { } shareError)
+            return shareError;
+
+        var (repoId, resolvedItemId, tenantId) = ResolveItemAccess(id, itemId);
+        try
+        {
+            var workspace = await _items.GetItemWorkspaceAsync(repoId, tenantId, resolvedItemId, cancellationToken);
+            return workspace == null ? NotFound() : Ok(workspace);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Share archived file with an external email (read-only cross-tenant link).</summary>
+    [HttpPost("/api/repositories/{id:guid}/items/{itemId:guid}/share")]
+    [ProducesResponseType(typeof(CreateRepositoryItemShareResult), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ShareItem(
+        Guid id,
+        Guid itemId,
+        [FromBody] CreateRepositoryItemShareRequest request,
+        CancellationToken cancellationToken)
     {
         var tenantId = RequireTenantId();
-        var workspace = await _items.GetItemWorkspaceAsync(id, tenantId, itemId, cancellationToken);
-        return workspace == null ? NotFound() : Ok(workspace);
+        var userId = GetUserId();
+        if (userId == null || userId == Guid.Empty)
+            return Unauthorized(new { error = "User id is required." });
+
+        try
+        {
+            var result = await _itemShares.CreateShareAsync(
+                tenantId, id, itemId, userId.Value, request, cancellationToken);
+            return CreatedAtAction(nameof(GetItem), new { id, itemId }, result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Files shared with the logged-in user (their email). Returns share tokens to reopen without the email link.</summary>
+    [HttpGet("/api/repositories/shared-with-me")]
+    [ProducesResponseType(typeof(IReadOnlyList<SharedWithMeItemDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListSharedWithMe(CancellationToken cancellationToken)
+    {
+        var email = GetUserEmail();
+        if (string.IsNullOrWhiteSpace(email))
+            return Unauthorized(new { error = "Logged-in user email is required to list shared files." });
+
+        var shares = await _itemShares.ListSharesForRecipientAsync(email, cancellationToken);
+        return Ok(shares);
+    }
+
+    /// <summary>Anonymous share link preview (before login).</summary>
+    [HttpGet("/api/repositories/share/{shareToken}/preview")]
+    [AllowAnonymous]
+    [ProducesResponseType(typeof(RepositoryItemSharePreviewDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetSharePreview(string shareToken, CancellationToken cancellationToken)
+    {
+        var preview = await _itemShares.GetPreviewAsync(shareToken, cancellationToken);
+        return preview == null ? NotFound(new { error = "Share link not found or expired." }) : Ok(preview);
+    }
+
+    /// <summary>Revoke an active share (sharer only).</summary>
+    [HttpDelete("/api/repositories/share/{shareId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.TenantUser)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RevokeShare(Guid shareId, CancellationToken cancellationToken)
+    {
+        var tenantId = RequireTenantId();
+        var userId = GetUserId();
+        if (userId == null || userId == Guid.Empty)
+            return Unauthorized();
+
+        var revoked = await _itemShares.RevokeShareAsync(shareId, tenantId, userId.Value, cancellationToken);
+        return revoked ? NoContent() : NotFound(new { error = "Share not found or already revoked." });
     }
 
     [HttpGet("/api/repositories/{id:guid}/items/{itemId:guid}/timeline")]
-    public async Task<IActionResult> GetItemTimeline(Guid id, Guid itemId, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetItemTimeline(
+        Guid id,
+        Guid itemId,
+        [FromQuery] string? shareToken,
+        [FromQuery] string? sharedtoken,
+        CancellationToken cancellationToken)
     {
-        var tenantId = RequireTenantId();
-        var timeline = await _itemActivity.GetTimelineAsync(id, tenantId, itemId, cancellationToken);
+        if (await EnsureShareContextAsync(cancellationToken) is { } shareError)
+            return shareError;
+
+        var (repoId, resolvedItemId, tenantId) = ResolveItemAccess(id, itemId);
+        var timeline = await _itemActivity.GetTimelineAsync(repoId, tenantId, resolvedItemId, cancellationToken);
         return timeline == null ? NotFound() : Ok(timeline);
     }
 
@@ -296,10 +423,15 @@ public sealed class RepositoriesController : ControllerBase
         Guid itemId,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
+        [FromQuery] string? shareToken = null,
+        [FromQuery] string? sharedtoken = null,
         CancellationToken cancellationToken = default)
     {
-        var tenantId = RequireTenantId();
-        var comments = await _itemActivity.GetCommentsAsync(id, tenantId, itemId, page, pageSize, cancellationToken);
+        if (await EnsureShareContextAsync(cancellationToken) is { } shareError)
+            return shareError;
+
+        var (repoId, resolvedItemId, tenantId) = ResolveItemAccess(id, itemId);
+        var comments = await _itemActivity.GetCommentsAsync(repoId, tenantId, resolvedItemId, page, pageSize, cancellationToken);
         return comments == null ? NotFound() : Ok(comments);
     }
 
@@ -375,7 +507,8 @@ public sealed class RepositoriesController : ControllerBase
     }
 
     /// <summary>
-    /// Upload with archive folder layout (multipart): ezts{tenantId}/archive/{repositoryName}/{level names}/{file}.
+    /// Upload with archive folder layout (multipart): ezts{tenantId}/archive/{repositoryName}/{folder fields}/{uploadedFileName}.ext
+    /// Folder levels from fields with IncludeInFolderStructure; file name from highest-level metadata above folders (e.g. PoNumber).
     /// Requires repository fields with IncludeInFolderStructure; metadata JSON required for mandatory levels.
     /// </summary>
     [HttpPost("/api/repositories/{id:guid}/items/upload-archive")]
@@ -487,12 +620,21 @@ public sealed class RepositoriesController : ControllerBase
 
     /// <summary>Download or inline-view the item file from storage (EZOFIS blob or local fallback).</summary>
     [HttpGet("/api/repositories/{id:guid}/items/{itemId:guid}/file")]
-    public async Task<IActionResult> GetItemFile(Guid id, Guid itemId, [FromQuery] string disposition = "inline", CancellationToken cancellationToken = default)
+    public async Task<IActionResult> GetItemFile(
+        Guid id,
+        Guid itemId,
+        [FromQuery] string disposition = "inline",
+        [FromQuery] string? shareToken = null,
+        [FromQuery] string? sharedtoken = null,
+        CancellationToken cancellationToken = default)
     {
-        var tenantId = RequireTenantId();
+        if (await EnsureShareContextAsync(cancellationToken) is { } shareError)
+            return shareError;
+
+        var (repoId, resolvedItemId, tenantId) = ResolveItemAccess(id, itemId);
         try
         {
-            var content = await _items.OpenItemFileAsync(id, tenantId, itemId, cancellationToken);
+            var content = await _items.OpenItemFileAsync(repoId, tenantId, resolvedItemId, cancellationToken);
             if (content == null)
                 return NotFound();
 
@@ -578,9 +720,31 @@ public sealed class RepositoriesController : ControllerBase
     private Guid RequireTenantId() =>
         _tenantProvider.GetTenantId() ?? throw new InvalidOperationException("Tenant context is required (X-Tenant-Id).");
 
+    /// <summary>Applies share context from optional shareToken / sharedtoken query or X-Share-Token header.</summary>
+    private async Task<IActionResult?> EnsureShareContextAsync(CancellationToken cancellationToken) =>
+        await RepositoryShareContextApplicator.TryApplyAsync(
+            HttpContext,
+            _itemShares,
+            _connectionResolver,
+            _connectionProvider,
+            cancellationToken);
+
+    private (Guid RepositoryId, Guid ItemId, Guid TenantId) ResolveItemAccess(Guid repositoryId, Guid itemId)
+    {
+        if (RepositoryShareContext.TryGet(HttpContext, out var share) && share != null)
+            return (share.SourceRepositoryId, share.SourceItemId, share.SourceTenantId);
+
+        return (repositoryId, itemId, RequireTenantId());
+    }
+
     private Guid? GetUserId()
     {
         var raw = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub") ?? User.FindFirstValue("oid");
         return Guid.TryParse(raw, out var id) ? id : null;
     }
+
+    private string? GetUserEmail() =>
+        User.FindFirstValue("email")
+        ?? User.FindFirstValue(ClaimTypes.Email)
+        ?? User.FindFirstValue("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress");
 }

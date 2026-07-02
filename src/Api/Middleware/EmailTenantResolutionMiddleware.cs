@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using SaaSApp.Catalog.Persistence;
 using SaaSApp.MultiTenancy;
 
@@ -11,11 +12,15 @@ namespace SaaSApp.Api.Middleware;
 /// </summary>
 public sealed class EmailTenantResolutionMiddleware
 {
+    private static readonly TimeSpan EmailTenantCacheTtl = TimeSpan.FromMinutes(15);
     private readonly RequestDelegate _next;
 
     public EmailTenantResolutionMiddleware(RequestDelegate next) => _next = next;
 
-    public async Task InvokeAsync(HttpContext context, IDbContextFactory<CatalogDbContext> catalogFactory)
+    public async Task InvokeAsync(
+        HttpContext context,
+        IDbContextFactory<CatalogDbContext> catalogFactory,
+        IMemoryCache cache)
     {
         // Before signup there is no tenant id; do not interpret X-Tenant-Id (email or guid) for these routes.
         if (TenantSignupOtpPathHelper.Matches(context))
@@ -45,6 +50,14 @@ public sealed class EmailTenantResolutionMiddleware
         }
 
         var email = header.ToLowerInvariant();
+        var cacheKey = "email-tenant:" + email;
+        if (cache.TryGetValue(cacheKey, out Guid cachedTenantId) && cachedTenantId != Guid.Empty)
+        {
+            context.Items[HttpTenantProvider.ResolvedTenantIdFromEmailItemKey] = cachedTenantId;
+            await _next(context);
+            return;
+        }
+
         await using var catalog = await catalogFactory.CreateDbContextAsync(context.RequestAborted);
         var tenantId = await catalog.UserTenants
             .AsNoTracking()
@@ -54,7 +67,10 @@ public sealed class EmailTenantResolutionMiddleware
             .FirstOrDefaultAsync(context.RequestAborted);
 
         if (tenantId != Guid.Empty)
+        {
+            cache.Set(cacheKey, tenantId, EmailTenantCacheTtl);
             context.Items[HttpTenantProvider.ResolvedTenantIdFromEmailItemKey] = tenantId;
+        }
 
         await _next(context);
     }

@@ -36,7 +36,8 @@ public sealed class TenantConnectionMiddleware
             // Auth endpoints require X-Tenant-Id header; fail fast before controller creation (avoids UsersDbContext resolution)
             var path = context.Request.Path.Value ?? "";
             if (path.Equals("/api/auth/ezofis/login", StringComparison.OrdinalIgnoreCase) ||
-                path.Equals("/api/auth/2fa/complete", StringComparison.OrdinalIgnoreCase))
+                path.Equals("/api/auth/2fa/complete", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/auth/social/login", StringComparison.OrdinalIgnoreCase))
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await context.Response.WriteAsJsonAsync(new { error = "X-Tenant-Id header is required to select organization." });

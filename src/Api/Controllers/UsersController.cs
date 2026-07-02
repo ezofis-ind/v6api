@@ -9,6 +9,23 @@ using SaaSApp.Users.Application.Contracts;
 using SaaSApp.Users.Application.Users.Commands.CreateUser;
 using SaaSApp.Users.Application.Users.Commands.DeleteUser;
 using SaaSApp.Users.Application.Users.Commands.UpdateUser;
+using SaaSApp.Users.Application.Roles.Commands.CreateRole;
+using SaaSApp.Users.Application.Roles.Commands.UpdateRole;
+using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
+using SaaSApp.Users.Application.Roles.Queries.ListRoles;
+using SaaSApp.Users.Application.Roles.Queries.GetRoleById;
+using SaaSApp.Users.Application.Groups.Commands.CreateGroup;
+using SaaSApp.Users.Application.Groups.Commands.UpdateGroup;
+using SaaSApp.Users.Application.Groups.Commands.DeleteGroup;
+using SaaSApp.Users.Application.Groups.Queries.ListGroups;
+using SaaSApp.Users.Application.Groups.Queries.GetGroupById;
+using SaaSApp.Users.Application.Menus.Commands.CreateMenu;
+using SaaSApp.Users.Application.Menus.Commands.UpdateMenu;
+using SaaSApp.Users.Application.Menus.Commands.DeleteMenu;
+using SaaSApp.Users.Application.Menus.Queries.ListMenus;
+using SaaSApp.Users.Application.Menus.Queries.GetMenuById;
+using SaaSApp.Users.Application.Roles.Commands.SetRoleMenus;
+using SaaSApp.Users.Application.Roles.Queries.GetRoleMenus;
 using SaaSApp.Users.Application.Users.Queries.GetCurrentUser;
 using SaaSApp.Users.Application.Users.Queries.GetUserById;
 using SaaSApp.Users.Application.Users.Queries.ListUsers;
@@ -46,7 +63,7 @@ public sealed class UsersController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = result.UserId }, result);
     }
 
-    /// <summary>Current user profile from users.Users (path is /api/usersession, not under /api/users/...).</summary>
+    /// <summary>Current user profile and custom-role permissions (path is /api/usersession). Includes permissionCount and permissionKeys grouped by category.</summary>
     [HttpGet("/api/usersession")]
     [ProducesResponseType(typeof(CurrentUserDetailResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -77,7 +94,263 @@ public sealed class UsersController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Get a user by ID in the current tenant.</summary>
+    /// <summary>List the built-in permission catalog for the role Permissions tab. Admin only.</summary>
+    [HttpGet("roles/permissions")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(ListPermissionCatalogQueryResult), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListRolePermissions(CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new ListPermissionCatalogQuery(), cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>List custom roles in the current tenant. Admin only.</summary>
+    [HttpGet("roles")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(ListRolesQueryResult), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListRoles(CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new ListRolesQuery(), cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>Create a custom role with assigned users and permissions. Admin only.</summary>
+    [HttpPost("roles")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(CreateRoleResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CreateRole([FromBody] CreateRoleRequest request, CancellationToken cancellationToken)
+    {
+        var command = new CreateRoleCommand(
+            request.RoleName,
+            request.Description,
+            request.Users ?? [],
+            request.Permissions ?? []);
+        var result = await _mediator.Send(command, cancellationToken);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+
+        return CreatedAtAction(
+            nameof(GetRoleById),
+            new { roleId = result.RoleId },
+            new CreateRoleResponse(result.RoleId!.Value, result.RoleName!, result.UserCount, result.PermissionCount));
+    }
+
+    /// <summary>Get a custom role by ID with assigned users and permissions. Admin only.</summary>
+    [HttpGet("roles/{roleId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(GetRoleByIdQueryResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetRoleById(Guid roleId, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new GetRoleByIdQuery(roleId), cancellationToken);
+        if (result == null)
+            return NotFound();
+        return Ok(result);
+    }
+
+    /// <summary>Update a custom role name, description, assigned users, and permissions. Admin only.</summary>
+    [HttpPut("roles/{roleId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateRole(Guid roleId, [FromBody] UpdateRoleRequest request, CancellationToken cancellationToken)
+    {
+        var command = new UpdateRoleCommand(
+            roleId,
+            request.RoleName,
+            request.Description,
+            request.Users,
+            request.Permissions);
+        var result = await _mediator.Send(command, cancellationToken);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+        return NoContent();
+    }
+
+    /// <summary>List user groups in the current tenant. Admin only.</summary>
+    [HttpGet("groups")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(ListGroupsQueryResult), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListGroups(CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new ListGroupsQuery(), cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>Get a user group by ID with member users. Admin only.</summary>
+    [HttpGet("groups/{groupId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(GetGroupByIdQueryResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetGroupById(Guid groupId, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new GetGroupByIdQuery(groupId), cancellationToken);
+        if (result == null)
+            return NotFound();
+        return Ok(result);
+    }
+
+    /// <summary>Create a user group with assigned members. Admin only.</summary>
+    [HttpPost("groups")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(CreateGroupResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CreateGroup([FromBody] CreateGroupRequest request, CancellationToken cancellationToken)
+    {
+        var command = new CreateGroupCommand(
+            request.GroupName,
+            request.Description,
+            request.Users ?? []);
+        var result = await _mediator.Send(command, cancellationToken);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+
+        return CreatedAtAction(
+            nameof(GetGroupById),
+            new { groupId = result.GroupId },
+            new CreateGroupResponse(result.GroupId!.Value, result.GroupName!, result.UserCount));
+    }
+
+    /// <summary>Update a user group name, description, and replace member list. Admin only. Users may be empty to clear all members.</summary>
+    [HttpPut("groups/{groupId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateGroup(Guid groupId, [FromBody] UpdateGroupRequest request, CancellationToken cancellationToken)
+    {
+        var command = new UpdateGroupCommand(
+            groupId,
+            request.GroupName,
+            request.Description,
+            request.Users ?? []);
+        var result = await _mediator.Send(command, cancellationToken);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+        return NoContent();
+    }
+
+    /// <summary>Soft-delete a user group. Admin only.</summary>
+    [HttpDelete("groups/{groupId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteGroup(Guid groupId, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new DeleteGroupCommand(groupId), cancellationToken);
+        if (!result.Found)
+            return NotFound();
+        return NoContent();
+    }
+
+    /// <summary>List navigation menus. Admin only.</summary>
+    [HttpGet("menus")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(ListMenusQueryResult), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListMenus(CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new ListMenusQuery(), cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>Get a navigation menu by ID. Admin only.</summary>
+    [HttpGet("menus/{menuId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(GetMenuByIdQueryResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetMenuById(Guid menuId, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new GetMenuByIdQuery(menuId), cancellationToken);
+        if (result == null)
+            return NotFound();
+        return Ok(result);
+    }
+
+    /// <summary>Create a custom navigation menu. Admin only.</summary>
+    [HttpPost("menus")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(CreateMenuResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> CreateMenu([FromBody] CreateMenuRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(
+            new CreateMenuCommand(request.Key, request.Label, request.RoutePath, request.SortOrder),
+            cancellationToken);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+
+        return CreatedAtAction(
+            nameof(GetMenuById),
+            new { menuId = result.MenuId },
+            new CreateMenuResponse(result.MenuId!.Value, result.Key!, result.Label!));
+    }
+
+    /// <summary>Update a navigation menu label, route, and sort order. Admin only.</summary>
+    [HttpPut("menus/{menuId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateMenu(Guid menuId, [FromBody] UpdateMenuRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(
+            new UpdateMenuCommand(menuId, request.Label, request.RoutePath, request.SortOrder),
+            cancellationToken);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+        return NoContent();
+    }
+
+    /// <summary>Soft-delete a custom navigation menu. System menus cannot be deleted. Admin only.</summary>
+    [HttpDelete("menus/{menuId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteMenu(Guid menuId, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new DeleteMenuCommand(menuId), cancellationToken);
+        if (!result.Found)
+            return NotFound();
+        if (result.Error != null)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+        return NoContent();
+    }
+
+    /// <summary>Get menus assigned to a role with default landing page. Admin only.</summary>
+    [HttpGet("roles/{roleId:guid}/menus")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(GetRoleMenusQueryResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetRoleMenus(Guid roleId, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new GetRoleMenusQuery(roleId), cancellationToken);
+        if (result == null)
+            return NotFound();
+        return Ok(result);
+    }
+
+    /// <summary>Assign menus to a role and set the default landing page. Admin only.</summary>
+    [HttpPut("roles/{roleId:guid}/menus")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetRoleMenus(Guid roleId, [FromBody] SetRoleMenusRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(
+            new SetRoleMenusCommand(roleId, request.Menus ?? [], request.DefaultLandingMenuId),
+            cancellationToken);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+        return NoContent();
+    }
+
+    /// <summary>Get a user by ID in the current tenant. Includes permissionCount and permissionKeys grouped by category.</summary>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(GetUserByIdQueryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -131,3 +404,37 @@ public record CreateUserRequest(string Email, string DisplayName, string? Passwo
 
 /// <summary>Request to update a user. Only non-null fields are updated.</summary>
 public record UpdateUserRequest(string? DisplayName, string? Role, string? FirstName = null, string? LastName = null, string? PhoneNo = null, string? Department = null, string? JobTitle = null, string? Language = null, string? CountryCode = null, string? AvatarPath = null, string? UiPreference = null);
+
+/// <summary>Request to create a custom role with assigned users and permissions.</summary>
+public record CreateRoleRequest(string RoleName, IReadOnlyList<Guid> Users, IReadOnlyList<string> Permissions, string? Description = null);
+
+/// <summary>Request to update a custom role and replace its users and permissions.</summary>
+public record UpdateRoleRequest(
+    string? RoleName = null,
+    string? Description = null,
+    IReadOnlyList<Guid>? Users = null,
+    IReadOnlyList<string>? Permissions = null);
+
+/// <summary>Response after creating a custom role.</summary>
+public record CreateRoleResponse(Guid RoleId, string RoleName, int UserCount, int PermissionCount);
+
+/// <summary>Request to create a user group with assigned members.</summary>
+public record CreateGroupRequest(string GroupName, IReadOnlyList<Guid> Users, string? Description = null);
+
+/// <summary>Request to update a user group and replace its member list.</summary>
+public record UpdateGroupRequest(string GroupName, IReadOnlyList<Guid> Users, string? Description = null);
+
+/// <summary>Response after creating a user group.</summary>
+public record CreateGroupResponse(Guid GroupId, string GroupName, int UserCount);
+
+/// <summary>Request to create a navigation menu.</summary>
+public record CreateMenuRequest(string Key, string Label, string RoutePath, int SortOrder);
+
+/// <summary>Request to update a navigation menu.</summary>
+public record UpdateMenuRequest(string Label, string RoutePath, int SortOrder);
+
+/// <summary>Response after creating a navigation menu.</summary>
+public record CreateMenuResponse(Guid MenuId, string Key, string Label);
+
+/// <summary>Request to assign menus to a role and set default landing page.</summary>
+public record SetRoleMenusRequest(IReadOnlyList<Guid> Menus, Guid? DefaultLandingMenuId = null);

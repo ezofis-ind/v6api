@@ -4,6 +4,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
 using SaaSApp.Api.Middleware;
+using SaaSApp.Api.Options;
 using SaaSApp.Api.Services;
 using SaaSApp.Api.Swagger;
 using SaaSApp.Billing.Application;
@@ -42,11 +43,14 @@ builder.Services.AddHttpsRedirection(options =>
 builder.Services.AddMultiTenancy();
 builder.Services.AddCatalog(builder.Configuration);
 builder.Services.AddScoped<ITenantSignupService, TenantSignupService>();
+builder.Services.Configure<TenantPilotUserOptions>(
+    builder.Configuration.GetSection(TenantPilotUserOptions.SectionName));
 builder.Services.AddScoped<IWorkflowSchemaService, WorkflowSchemaService>();
 builder.Services.AddScoped<IDmsSchemaService, DmsSchemaService>();
 builder.Services.AddHttpClient(nameof(LegacyWorkflowTransactionService));
 builder.Services.AddScoped<ILegacyWorkflowTransactionService, LegacyWorkflowTransactionService>();
 builder.Services.AddScoped<SaaSApp.Workflow.Application.Contracts.IWorkflowStartAttachmentUploader, WorkflowStartAttachmentUploader>();
+builder.Services.AddScoped<SaaSApp.Workflow.Application.Contracts.IWorkflowAttachmentArchiveService, WorkflowAttachmentArchiveService>();
 builder.Services.AddMemoryCache();
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 if (!string.IsNullOrWhiteSpace(redisConnectionString))
@@ -64,6 +68,7 @@ else
 }
 builder.Services.AddScoped<ITwoFactorService, TwoFactorService>();
 builder.Services.AddScoped<IEzofisAuthService, EzofisAuthService>();
+builder.Services.AddScoped<SaaSApp.Users.Application.Contracts.IUserTenantRoleSync, UserTenantRoleSync>();
 
 // JWT Bearer: Microsoft Entra ID (Azure AD), Auth0, and Ezofis
 var azureAdClientId = builder.Configuration["AzureAd:ClientId"];
@@ -163,15 +168,37 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 var hangfireEnabled = !string.IsNullOrWhiteSpace(connectionString);
 if (hangfireEnabled)
 {
+    var hangfireStorageOptions = new SqlServerStorageOptions
+    {
+        // Reduce catalog DB polling so HTTP requests are not competing with Hangfire every few seconds.
+        QueuePollInterval = TimeSpan.FromSeconds(15),
+        JobExpirationCheckInterval = TimeSpan.FromHours(1),
+    };
+
     builder.Services.AddHangfire(config => config
         .SetDataCompatibilityLevel(Hangfire.CompatibilityLevel.Version_180)
         .UseSimpleAssemblyNameTypeSerializer()
         .UseRecommendedSerializerSettings()
-        .UseSqlServerStorage(connectionString));
+        .UseSqlServerStorage(connectionString, hangfireStorageOptions));
+
     if (builder.Configuration.GetValue<bool?>("Hangfire:RunServerInApi") ?? true)
     {
+        // API host: keep workers low — each job holds SQL + HTTP to Python (minutes). High WorkerCount
+        // starves IIS/Kestrel threads and makes every API call feel slow.
+        var apiWorkers = builder.Configuration.GetValue<int?>("Hangfire:ApiWorkerCount")
+            ?? builder.Configuration.GetValue<int?>("Hangfire:WorkerCount")
+            ?? 5;
+        apiWorkers = Math.Clamp(apiWorkers, 1, 10);
+
         builder.Services.AddHangfireServer(options =>
-            options.WorkerCount = builder.Configuration.GetValue<int?>("Hangfire:WorkerCount") ?? 5);
+        {
+            options.WorkerCount = apiWorkers;
+            options.ServerName = $"{Environment.MachineName}:V6Api";
+            options.Queues = ["default"];
+            options.SchedulePollingInterval = TimeSpan.FromSeconds(15);
+        });
+
+        Log.Information("Hangfire server in API process: {WorkerCount} worker(s)", apiWorkers);
     }
 }
 else
@@ -262,6 +289,7 @@ app.UseAuthorization();
 app.UseMiddleware<EmailTenantResolutionMiddleware>();
 // Resolve tenant DB connection from catalog (must run after auth so JWT/tid is available)
 app.UseMiddleware<TenantConnectionMiddleware>();
+app.UseMiddleware<RepositoryShareMiddleware>();
 // Ensure workflow schema exists in tenant DB before workflow operations
 app.UseMiddleware<WorkflowSchemaEnsuringMiddleware>();
 app.UseMiddleware<DmsSchemaEnsuringMiddleware>();

@@ -81,6 +81,12 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
             mailboxForm: null,
             cancellationToken);
 
+        if (reviewSync.WorkflowInstanceId != instance.Id)
+        {
+            throw new InvalidOperationException(
+                $"Transaction row was not linked to workflow instance {instance.Id:D}.");
+        }
+
         if (reviewSync.Status is LegacyTransactionSyncStatus.ReviewUpdated
             or LegacyTransactionSyncStatus.ReviewAlreadyUpdated
             or LegacyTransactionSyncStatus.StepInserted
@@ -224,6 +230,7 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
             formEntryItemId);
 
         return new WorkflowStartBootstrapResult(
+            reviewSync.CurrentTransactionId,
             currentTransactionId,
             formEntryItemId,
             apAgentStepInstance?.Id,
@@ -409,6 +416,12 @@ VALUES
         var tableName = $"processForm_{workflowSuffix}";
         if (await TableExistsAsync(connection, "workflow", tableName, cancellationToken))
         {
+            const string schema = "workflow";
+            var hasWorkflowInstanceId = await ColumnExistsAsync(connection, schema, tableName, "WorkflowInstanceId", cancellationToken);
+            var hasProcessId = await ColumnExistsAsync(connection, schema, tableName, "ProcessId", cancellationToken);
+            if (hasWorkflowInstanceId && !hasProcessId)
+                return;
+
             await MigrateProcessFormDropProcessIdAsync(connection, workflowSuffix, cancellationToken);
             return;
         }

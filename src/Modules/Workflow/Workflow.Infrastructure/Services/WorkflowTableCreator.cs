@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Data.SqlClient;
 using SaaSApp.Workflow.Application.Contracts;
 
@@ -9,6 +10,50 @@ namespace SaaSApp.Workflow.Infrastructure.Services;
 /// </summary>
 public sealed class WorkflowTableCreator : IWorkflowTableCreator
 {
+    private static readonly ConcurrentDictionary<string, byte> LegacyTransactionSchemaEnsured = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, byte> LegacyMailboxSchemaEnsured = new(StringComparer.OrdinalIgnoreCase);
+
+    public async Task<bool> WorkflowCoreTablesExistAsync(
+        Guid workflowId,
+        string connectionString,
+        CancellationToken cancellationToken = default)
+    {
+        var suffix = workflowId.ToString("N")[..8];
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        const string sql = """
+            SELECT CASE WHEN EXISTS (
+                SELECT 1
+                FROM sys.tables t
+                INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+                WHERE s.name = N'workflow' AND t.name = @TableName
+            ) THEN 1 ELSE 0 END;
+            """;
+
+        await using var cmd = new SqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@TableName", $"WorkflowInstances_{suffix}");
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken)) == 1;
+    }
+
+    /// <summary>
+    /// Fast path for workflow start: skip full DDL when tables already exist (created at publish).
+    /// </summary>
+    public async Task EnsureWorkflowTablesForStartAsync(
+        Guid workflowId,
+        string connectionString,
+        CancellationToken cancellationToken = default)
+    {
+        if (await WorkflowCoreTablesExistAsync(workflowId, connectionString, cancellationToken))
+        {
+            await EnsureLegacyTransactionTableAsync(workflowId, connectionString, cancellationToken);
+            await EnsureLegacyMailboxTablesAsync(workflowId, connectionString, cancellationToken);
+            return;
+        }
+
+        await CreateWorkflowTablesAsync(workflowId, connectionString, cancellationToken);
+    }
+
     public async Task CreateWorkflowTablesAsync(Guid workflowId, string connectionString, CancellationToken cancellationToken = default)
     {
         var workflowIdStr = workflowId.ToString("N"); // Remove hyphens for table names
@@ -35,6 +80,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'workflow')
             GenerateWorkflowInstanceUserStateTableScript(suffix),
             GenerateLegacyTransactionTableScript(suffix),
             GenerateProcessFormTableScript(suffix),
+            GenerateProcessAddonTableScript(suffix),
             GenerateCommentsTableScript(suffix),
             GenerateAttachmentsTableScript(suffix),
             GenerateFormsTableScript(suffix),
@@ -65,6 +111,9 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'workflow')
 
         await EnsureLegacyTransactionTableAsync(connection, suffix, cancellationToken);
         await EnsureLegacyMailboxTablesAsync(connection, suffix, cancellationToken);
+
+        LegacyTransactionSchemaEnsured.TryAdd(suffix, 0);
+        LegacyMailboxSchemaEnsured.TryAdd(suffix, 0);
     }
 
     /// <summary>Creates or upgrades workflow.transaction_{suffix} (TransactionGuid column + index).</summary>
@@ -110,6 +159,9 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'workflow')
         string suffix,
         CancellationToken cancellationToken)
     {
+        if (LegacyTransactionSchemaEnsured.ContainsKey(suffix))
+            return;
+
         await using (var cmd = new SqlCommand(GenerateLegacyTransactionTableScript(suffix), connection))
         {
             cmd.CommandTimeout = 120;
@@ -149,6 +201,7 @@ END";
         }
 
         await MigrateTransactionWorkflowInstanceIdAsync(connection, suffix, cancellationToken);
+        LegacyTransactionSchemaEnsured.TryAdd(suffix, 0);
     }
 
     private static async Task MigrateTransactionWorkflowInstanceIdAsync(
@@ -229,6 +282,7 @@ END";
             $"WorkflowInstanceUserState_{suffix}",
             $"transaction_{suffix}",
             $"processForm_{suffix}",
+            $"processAddon_{suffix}",
             $"Inbox_{suffix}",
             $"Sent_{suffix}",
             $"Completed_{suffix}",
@@ -266,6 +320,9 @@ END";
         string workflowKey,
         CancellationToken cancellationToken)
     {
+        if (LegacyMailboxSchemaEnsured.ContainsKey(workflowKey))
+            return;
+
         var inbox = GenerateLegacyMailboxTableScript("Inbox", workflowKey);
         var sent = GenerateLegacyMailboxTableScript("Sent", workflowKey);
         var completed = GenerateLegacyMailboxTableScript("Completed", workflowKey);
@@ -280,6 +337,7 @@ END";
         await MigrateLegacyMailboxInstanceColumnsAsync(connection, workflowKey, cancellationToken);
         await EnsureLegacyMailboxIndexesAsync(connection, workflowKey, cancellationToken);
         await EnsureLegacyTransactionMailboxIndexesAsync(connection, workflowKey, cancellationToken);
+        LegacyMailboxSchemaEnsured.TryAdd(workflowKey, 0);
     }
 
     private static async Task EnsureLegacyTransactionMailboxIndexesAsync(
@@ -696,6 +754,30 @@ BEGIN
     );
 END
 {EnsureNonClusteredIndex($"workflow.processForm_{suffix}", $"IX_processForm_{idx}_WorkflowInstanceId_IsDeleted", "WorkflowInstanceId, IsDeleted")}";
+    }
+
+    /// <summary>Legacy v5 processAddon_{suffix}: process (instance) → repository item link for attachments.</summary>
+    private static string GenerateProcessAddonTableScript(string suffix)
+    {
+        var idx = suffix.Replace("-", "_");
+        return $@"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'processAddon_{suffix}' AND schema_id = SCHEMA_ID('workflow'))
+BEGIN
+    CREATE TABLE workflow.processAddon_{suffix} (
+        Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        ProcessId UNIQUEIDENTIFIER NOT NULL,
+        RepositoryId UNIQUEIDENTIFIER NOT NULL,
+        ItemId UNIQUEIDENTIFIER NOT NULL,
+        FileName NVARCHAR(512) NULL,
+        TransactionId INT NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_processAddon_{idx}_CreatedAt DEFAULT SYSUTCDATETIME(),
+        ModifiedAt DATETIME2 NULL,
+        CreatedBy UNIQUEIDENTIFIER NOT NULL,
+        ModifiedBy UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_processAddon_{idx}_IsDeleted DEFAULT 0
+    );
+END
+{EnsureNonClusteredIndex($"workflow.processAddon_{suffix}", $"IX_processAddon_{idx}_ProcessId_IsDeleted", "ProcessId, IsDeleted")}";
     }
 
     private static string GenerateFormsTableScript(string suffix)

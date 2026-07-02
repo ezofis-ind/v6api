@@ -264,6 +264,9 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
         if (item == null)
             return null;
 
+        var fields = new Dictionary<string, object?>(item.Fields, StringComparer.OrdinalIgnoreCase);
+        await TryResolveCreatedByEmailAsync(fields, cancellationToken);
+
         return RepositoryItemWorkspaceBuilder.Build(
             repositoryId,
             repo,
@@ -273,7 +276,32 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
             item.FileSize,
             item.StorageProviderId,
             item.StorageProviderCode,
-            item.Fields);
+            fields);
+    }
+
+    private async Task TryResolveCreatedByEmailAsync(
+        IDictionary<string, object?> fields,
+        CancellationToken cancellationToken)
+    {
+        if (!fields.TryGetValue("CreatedBy", out var createdByRaw)
+            || !RepositoryUserNameResolver.TryParseUserId(createdByRaw, out var createdById))
+        {
+            return;
+        }
+
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var email = await RepositoryUserNameResolver.ResolveEmailAsync(
+            connection,
+            createdById,
+            cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(email))
+            fields["CreatedBy"] = email;
     }
 
     public async Task<Guid> CreateItemAsync(

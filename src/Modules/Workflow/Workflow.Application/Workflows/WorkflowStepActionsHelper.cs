@@ -110,10 +110,23 @@ public static class WorkflowStepActionsHelper
             return "REJECT";
         if (upper.Contains("PARTIALLY", StringComparison.Ordinal) && upper.Contains("APPROV", StringComparison.Ordinal))
             return "PARTIAL_APPROVE";
+        if (upper.Contains("PARTIAL", StringComparison.Ordinal) && upper.Contains("MATCH", StringComparison.Ordinal))
+            return "PARTIAL_MATCH";
         if (upper is "VERIFY" or "VERIFIED")
             return "VERIFY";
+        if (upper is "MATCH" or "MATCHED")
+            return "MATCH";
         if (upper is "SUBMIT")
             return "SUBMIT";
         return null;
+    }
+
+    /// <summary>True for workflow proceed/review labels (not free-text user comments).</summary>
+    public static bool IsProceedActionLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return GetActionBucket(NormalizeAction(value)) != null;
     }
 }

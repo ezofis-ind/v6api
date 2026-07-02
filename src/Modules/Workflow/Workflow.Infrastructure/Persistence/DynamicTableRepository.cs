@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using SaaSApp.Workflow.Application.Contracts;
+using SaaSApp.Workflow.Application.Workflows;
 using System.Data;
 
 namespace SaaSApp.Workflow.Infrastructure.Persistence;
@@ -25,6 +26,9 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
 
     public async Task<Guid> AddCommentAsync(Guid workflowId, Guid workflowInstanceId, string comments, Guid createdBy, Guid? stepInstanceId = null, string? externalCommentsBy = null, int showTo = 0, CancellationToken cancellationToken = default)
     {
+        if (WorkflowCommentHelper.IsProceedActionSystemComment(comments))
+            return Guid.Empty;
+
         var tableName = GetTableName(workflowId, "WorkflowComments");
         var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
         var connectionString = _tenantContext.ConnectionString ?? throw new InvalidOperationException("Connection string is required.");
@@ -127,11 +131,15 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
+            var commentText = reader.GetString(3);
+            if (WorkflowCommentHelper.IsProceedActionSystemComment(commentText))
+                continue;
+
             results.Add(new WorkflowCommentRowDto(
                 Id: reader.GetGuid(0),
                 WorkflowInstanceId: reader.GetGuid(1),
                 StepInstanceId: reader.IsDBNull(2) ? null : reader.GetGuid(2),
-                Comments: reader.GetString(3),
+                Comments: commentText,
                 ExternalCommentsBy: reader.IsDBNull(4) ? null : reader.GetString(4),
                 ShowTo: reader.GetInt32(5),
                 EmbedJson: reader.IsDBNull(6) ? null : reader.GetString(6),

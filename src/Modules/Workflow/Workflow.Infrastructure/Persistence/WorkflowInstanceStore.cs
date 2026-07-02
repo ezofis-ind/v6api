@@ -455,18 +455,137 @@ public sealed class WorkflowInstanceStore : IWorkflowInstanceStore
         dataCmd.Parameters.AddWithValue("@PageSize", pageSize);
 
         var items = new List<WorkflowInstance>();
+        var pairs = new List<(Guid InstanceId, Guid WorkflowId)>();
         await using (var reader = await dataCmd.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
+                pairs.Add((reader.GetGuid(0), reader.GetGuid(1)));
+        }
+
+        foreach (var group in pairs.GroupBy(p => p.WorkflowId))
+        {
+            var loaded = await LoadInstancesBatchAsync(
+                conn,
+                group.Key,
+                group.Select(p => p.InstanceId).ToList(),
+                cancellationToken);
+            items.AddRange(loaded);
+        }
+
+        var order = pairs.Select((p, i) => (p.InstanceId, i)).ToDictionary(x => x.InstanceId, x => x.i);
+        items.Sort((a, b) => order.GetValueOrDefault(a.Id, int.MaxValue).CompareTo(order.GetValueOrDefault(b.Id, int.MaxValue)));
+        return (items, totalCount);
+    }
+
+    private async Task<List<WorkflowInstance>> LoadInstancesBatchAsync(
+        SqlConnection conn,
+        Guid workflowId,
+        IReadOnlyList<Guid> instanceIds,
+        CancellationToken cancellationToken)
+    {
+        if (instanceIds.Count == 0)
+            return [];
+
+        var instancesTable = InstancesTable(workflowId);
+        var stepInstancesTable = StepInstancesTable(workflowId);
+        var slaTable = InstanceSlasTable(workflowId);
+
+        var tableCheck = $@"
+            IF EXISTS (SELECT * FROM sys.tables WHERE name = 'WorkflowInstances_{GetSuffix(workflowId)}' AND schema_id = SCHEMA_ID('workflow'))
+                SELECT 1";
+        await using (var checkCmd = new SqlCommand(tableCheck, conn))
+        {
+            if (await checkCmd.ExecuteScalarAsync(cancellationToken) == null)
+                return [];
+        }
+
+        var idParams = new List<string>(instanceIds.Count);
+        var instanceSql = new System.Text.StringBuilder($"SELECT * FROM {instancesTable} WHERE Id IN (");
+        for (var i = 0; i < instanceIds.Count; i++)
+        {
+            var param = $"@Id{i}";
+            idParams.Add(param);
+            if (i > 0)
+                instanceSql.Append(", ");
+            instanceSql.Append(param);
+        }
+        instanceSql.Append(')');
+
+        var instances = new Dictionary<Guid, WorkflowInstance>(instanceIds.Count);
+        await using (var instanceCmd = new SqlCommand(instanceSql.ToString(), conn))
+        {
+            for (var i = 0; i < instanceIds.Count; i++)
+                instanceCmd.Parameters.AddWithValue($"@Id{i}", instanceIds[i]);
+
+            await using var reader = await instanceCmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
             {
-                var instanceId = reader.GetGuid(0);
-                var workflowId = reader.GetGuid(1);
-                var instance = await GetByIdAsync(instanceId, cancellationToken);
-                if (instance != null)
-                    items.Add(instance);
+                var instance = ReadWorkflowInstance(reader, workflowId);
+                instances[instance.Id] = instance;
             }
         }
-        return (items, totalCount);
+
+        if (instances.Count == 0)
+            return [];
+
+        var stepSql = new System.Text.StringBuilder($"SELECT * FROM {stepInstancesTable} WHERE WorkflowInstanceId IN (");
+        for (var i = 0; i < instanceIds.Count; i++)
+        {
+            if (i > 0)
+                stepSql.Append(", ");
+            stepSql.Append(idParams[i]);
+        }
+        stepSql.Append(") ORDER BY [Order]");
+
+        await using (var stepCmd = new SqlCommand(stepSql.ToString(), conn))
+        {
+            for (var i = 0; i < instanceIds.Count; i++)
+                stepCmd.Parameters.AddWithValue($"@Id{i}", instanceIds[i]);
+
+            await using var stepReader = await stepCmd.ExecuteReaderAsync(cancellationToken);
+            while (await stepReader.ReadAsync(cancellationToken))
+            {
+                var instanceId = stepReader.GetGuid(stepReader.GetOrdinal("WorkflowInstanceId"));
+                if (instances.TryGetValue(instanceId, out var instance))
+                {
+                    var step = ReadWorkflowStepInstance(stepReader, instanceId);
+                    instance.AddStepInstance(step);
+                }
+            }
+        }
+
+        try
+        {
+            var slaSql = new System.Text.StringBuilder($"SELECT * FROM {slaTable} WHERE WorkflowInstanceId IN (");
+            for (var i = 0; i < instanceIds.Count; i++)
+            {
+                if (i > 0)
+                    slaSql.Append(", ");
+                slaSql.Append(idParams[i]);
+            }
+            slaSql.Append(')');
+
+            await using var slaCmd = new SqlCommand(slaSql.ToString(), conn);
+            for (var i = 0; i < instanceIds.Count; i++)
+                slaCmd.Parameters.AddWithValue($"@Id{i}", instanceIds[i]);
+
+            await using var slaReader = await slaCmd.ExecuteReaderAsync(cancellationToken);
+            while (await slaReader.ReadAsync(cancellationToken))
+            {
+                var instanceId = slaReader.GetGuid(slaReader.GetOrdinal("WorkflowInstanceId"));
+                if (instances.TryGetValue(instanceId, out var instance))
+                {
+                    var sla = ReadWorkflowInstanceSla(slaReader, instanceId);
+                    instance.SetSla(sla);
+                }
+            }
+        }
+        catch (SqlException) { /* SLA table may not exist */ }
+
+        return instanceIds
+            .Where(instances.ContainsKey)
+            .Select(id => instances[id])
+            .ToList();
     }
 
     private static void AddInstanceParams(SqlCommand cmd, WorkflowInstance i)

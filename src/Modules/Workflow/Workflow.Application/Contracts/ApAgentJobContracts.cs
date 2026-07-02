@@ -19,6 +19,10 @@ public sealed record ApAgentJobStatusResult(
     DateTime? UpdatedAtUtc,
     bool IsTerminal);
 
+public sealed record ApAgentJobStatusListResult(
+    IReadOnlyList<ApAgentJobStatusResult> Items,
+    IReadOnlyList<string> NotFoundJobIds);
+
 public interface IApAgentJobProgressService
 {
     Task RegisterQueuedAsync(
@@ -76,4 +80,8 @@ public sealed record ApAgentJobProgressRow(
 public interface IApAgentJobStatusService
 {
     Task<ApAgentJobStatusResult?> GetStatusAsync(string jobId, CancellationToken cancellationToken = default);
+
+    Task<ApAgentJobStatusListResult> GetStatusesAsync(
+        IEnumerable<string> jobIds,
+        CancellationToken cancellationToken = default);
 }

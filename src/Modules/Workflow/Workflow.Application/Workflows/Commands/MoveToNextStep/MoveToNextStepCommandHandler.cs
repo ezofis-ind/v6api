@@ -232,7 +232,8 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
             _ => "OK"
         };
 
-        if (!string.IsNullOrWhiteSpace(request.Comments))
+        if (!string.IsNullOrWhiteSpace(request.Comments)
+            && !WorkflowCommentHelper.IsProceedActionSystemComment(request.Comments))
         {
             var stepInstanceId = WorkflowStepTransitionHelper.FindStepInstance(instance, targetDefinitionStep.Id)?.Id;
             await _dynamicTableRepository.AddCommentAsync(

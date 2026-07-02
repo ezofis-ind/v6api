@@ -7,13 +7,16 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
 {
     private readonly IWorkflowRepository _workflowRepository;
     private readonly IDynamicTableRepository _dynamicTableRepository;
+    private readonly IWorkflowProcessAddonService _processAddon;
 
     public GetInstanceAttachmentsQueryHandler(
         IWorkflowRepository workflowRepository,
-        IDynamicTableRepository dynamicTableRepository)
+        IDynamicTableRepository dynamicTableRepository,
+        IWorkflowProcessAddonService processAddon)
     {
         _workflowRepository = workflowRepository;
         _dynamicTableRepository = dynamicTableRepository;
+        _processAddon = processAddon;
     }
 
     public async Task<GetInstanceAttachmentsQueryResult> Handle(GetInstanceAttachmentsQuery request, CancellationToken cancellationToken)
@@ -39,6 +42,35 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
             a.ModifiedAtUtc,
             RepositoryId: a.RepositoryId ?? workflowRepositoryGuid,
             ItemId: a.ItemId)).ToList();
+
+        var knownItemIds = attachmentItems
+            .Where(a => a.ItemId is { } id && id != Guid.Empty)
+            .Select(a => a.ItemId!.Value)
+            .ToHashSet();
+
+        var addons = await _processAddon.ListByProcessAsync(request.WorkflowId, request.InstanceId, cancellationToken);
+        foreach (var addon in addons)
+        {
+            if (knownItemIds.Contains(addon.ItemId))
+                continue;
+
+            attachmentItems.Add(new AttachmentItem(
+                Id: Guid.Empty,
+                WorkflowInstanceId: request.InstanceId,
+                WorkflowId: request.WorkflowId,
+                FileName: addon.FileName ?? string.Empty,
+                FilePath: string.Empty,
+                FileSize: null,
+                ContentType: null,
+                CreatedAtUtc: addon.CreatedAt,
+                CreatedBy: addon.CreatedBy,
+                ModifiedBy: null,
+                ModifiedAtUtc: null,
+                RepositoryId: addon.RepositoryId,
+                ItemId: addon.ItemId));
+
+            knownItemIds.Add(addon.ItemId);
+        }
 
         var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowAttachments");
 

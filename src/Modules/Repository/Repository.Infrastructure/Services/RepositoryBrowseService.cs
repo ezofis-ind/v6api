@@ -23,10 +23,8 @@ public sealed class RepositoryBrowseService : IRepositoryBrowseService
         var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
             ?? throw new InvalidOperationException("Repository not found.");
 
-        var folderFields = repo.Fields
-            .Where(f => f.IncludeInFolderStructure)
-            .OrderBy(f => f.Level)
-            .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+        var folderFields = RepositoryFolderStructureHelper.OrderFolderFields(
+            repo.Fields.Where(f => f.IncludeInFolderStructure))
             .Select(f => new BrowseFolderFieldDto(f.Level, f.Name, f.SqlColumnName))
             .ToList();
 
@@ -130,9 +128,8 @@ public sealed class RepositoryBrowseService : IRepositoryBrowseService
         if (!RepositorySqlHelper.IsValidItemsTableName(repo.ItemsTableName))
             throw new InvalidOperationException("Invalid items table.");
 
-        var folderFields = repo.Fields
-            .Where(f => f.IncludeInFolderStructure)
-            .ToList();
+        var folderFields = RepositoryFolderStructureHelper.OrderFolderFields(
+            repo.Fields.Where(f => f.IncludeInFolderStructure));
 
         if (folderFields.Count == 0)
             throw new InvalidOperationException("No folder structure fields configured for this repository.");
@@ -260,24 +257,40 @@ public sealed class RepositoryBrowseService : IRepositoryBrowseService
 
     private static BrowsePathDto ResolveBrowsePath(BrowseStructureDto structure, string? pathId)
     {
-        var id = string.IsNullOrWhiteSpace(pathId) ? "default" : pathId.Trim();
+        if (structure.BrowsePaths.Count == 0)
+            throw new InvalidOperationException("No browse paths configured.");
 
-        var match = structure.BrowsePaths.FirstOrDefault(p =>
-            string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
-
-        // Allow shorthand: pathId=Supplier → by-Supplier
-        if (match == null && !id.StartsWith("by-", StringComparison.OrdinalIgnoreCase))
+        var id = pathId?.Trim();
+        if (!string.IsNullOrWhiteSpace(id))
         {
-            match = structure.BrowsePaths.FirstOrDefault(p =>
-                string.Equals(p.Id, $"by-{id}", StringComparison.OrdinalIgnoreCase));
+            var match = structure.BrowsePaths.FirstOrDefault(p =>
+                string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+
+            // Allow shorthand: pathId=Supplier → by-Supplier
+            if (match == null && !id.StartsWith("by-", StringComparison.OrdinalIgnoreCase))
+            {
+                match = structure.BrowsePaths.FirstOrDefault(p =>
+                    string.Equals(p.Id, $"by-{id}", StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (match != null)
+                return match;
+
+            var valid = string.Join(", ", structure.BrowsePaths.Select(p => p.Id));
+            throw new ArgumentException(
+                $"Unknown pathId '{pathId}'. Use an id from GET .../browse/structure browsePaths, e.g. {valid}");
         }
 
-        if (match != null)
-            return match;
+        var firstField = structure.FolderFields.OrderBy(f => f.Level).FirstOrDefault();
+        if (firstField != null)
+        {
+            var byFirst = structure.BrowsePaths.FirstOrDefault(p =>
+                string.Equals(p.Id, $"by-{firstField.SqlColumnName}", StringComparison.OrdinalIgnoreCase));
+            if (byFirst != null)
+                return byFirst;
+        }
 
-        var valid = string.Join(", ", structure.BrowsePaths.Select(p => p.Id));
-        throw new ArgumentException(
-            $"Unknown pathId '{pathId}'. Use an id from GET .../browse/structure browsePaths, e.g. {valid}");
+        return structure.BrowsePaths[0];
     }
 
     private static IReadOnlyList<BrowsePathDto> BuildBrowsePaths(IReadOnlyList<BrowseFolderFieldDto> folderFields)
@@ -286,18 +299,14 @@ public sealed class RepositoryBrowseService : IRepositoryBrowseService
             return Array.Empty<BrowsePathDto>();
 
         var paths = new List<BrowsePathDto>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         void AddPath(string id, string label, IEnumerable<string> order)
         {
-            var key = string.Join(">", order);
-            if (!seen.Add(key))
+            if (!seenIds.Add(id))
                 return;
             paths.Add(new BrowsePathDto(id, label, order.ToList()));
         }
-
-        var defaultOrder = folderFields.OrderBy(f => f.Level).Select(f => f.SqlColumnName).ToList();
-        AddPath("default", "Default", defaultOrder);
 
         foreach (var root in folderFields.OrderBy(f => f.Level))
         {

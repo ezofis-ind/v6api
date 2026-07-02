@@ -64,7 +64,11 @@ internal static class RepositoryItemFilterHelper
 
         if (allowedColumns.Contains(key))
         {
-            column = RepositorySqlHelper.SanitizeColumnName(key);
+            var matchedField = repo.Fields.FirstOrDefault(f =>
+                string.Equals(f.SqlColumnName, key, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(f.Name, key, StringComparison.OrdinalIgnoreCase));
+
+            column = RepositorySqlHelper.SanitizeColumnName(matchedField?.SqlColumnName ?? key);
             return true;
         }
 

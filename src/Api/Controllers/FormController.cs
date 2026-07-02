@@ -18,11 +18,70 @@ public sealed class FormController : ControllerBase
 {
     private readonly IFormService _formService;
     private readonly IFormEntryService _formEntryService;
+    private readonly IFormMasterFileUploadService _formMasterFileUpload;
 
-    public FormController(IFormService formService, IFormEntryService formEntryService)
+    public FormController(
+        IFormService formService,
+        IFormEntryService formEntryService,
+        IFormMasterFileUploadService formMasterFileUpload)
     {
         _formService = formService;
         _formEntryService = formEntryService;
+        _formMasterFileUpload = formMasterFileUpload;
+    }
+
+    /// <summary>
+    /// Upload master CSV/XLSX for a form (v5 POST /api/form/uploadMasterFile).
+    /// Stores file in tenant blob, creates dbo.masterFileprocess + dbo.notification rows, enqueues Hangfire Python import.
+    /// </summary>
+    [HttpPost("uploadMasterFile")]
+    [DisableRequestSizeLimit]
+    [RequestFormLimits(MultipartBodyLengthLimit = 104_857_600)]
+    [ProducesResponseType(typeof(FormMasterFileUploadResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UploadMasterFile(
+        [FromForm] string? formId,
+        [FromForm] string? workflowId,
+        [FromForm] string? instanceId,
+        IFormFile? file,
+        CancellationToken cancellationToken)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest("No file received.");
+
+        if (string.IsNullOrWhiteSpace(formId))
+            return BadRequest(new { error = "formId is required." });
+
+        var userId = GetCurrentUserId()
+            ?? throw new InvalidOperationException("Authenticated user is required.");
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var request = new FormMasterFileUploadRequest(
+                formId.Trim(),
+                string.IsNullOrWhiteSpace(workflowId) ? null : workflowId.Trim(),
+                string.IsNullOrWhiteSpace(instanceId) ? null : instanceId.Trim(),
+                stream,
+                file.FileName,
+                file.ContentType,
+                file.Length);
+
+            var result = await _formMasterFileUpload.UploadMasterFileAsync(request, userId, cancellationToken);
+            return Ok(new FormMasterFileUploadResponse(
+                result.MasterFileProcessId,
+                result.FilePath,
+                result.NotificationId,
+                result.HangfireJobId));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     /// <summary>Add new form from designer JSON (v5 POST /api/form).</summary>
@@ -221,6 +280,101 @@ public sealed class FormController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Form entry schema: all wFormControl rows for this formId (jsonId, name, type, parentId, etc.).
+    /// </summary>
+    [HttpGet("{id}/entry/controls")]
+    [HttpGet("{id}/controls")]
+    [ProducesResponseType(typeof(FormControlsResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetFormControls(string id, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return NotFound();
+
+        try
+        {
+            var result = await _formService.GetControlsAsync(id, cancellationToken);
+            if (result == null)
+                return NotFound();
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// List all form entries for a form (v5 POST /api/form/{id}/entry/all).
+    /// Pass <paramref name="id"/> (formId) to get entry rows from dbo.ezfb_{form}_items.
+    /// </summary>
+    [HttpPost("{id}/entry/all")]
+    [ProducesResponseType(typeof(FormEntryAllResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ListEntries(
+        string id,
+        [FromBody] FormEntryAllRequest? request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return NotFound();
+
+        try
+        {
+            var result = await _formEntryService.ListEntriesAsync(
+                id,
+                request ?? new FormEntryAllRequest(),
+                cancellationToken);
+            if (result.Status != FormEntryGetStatus.Found)
+                return NotFound();
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Simple list of form entries by formId (GET shortcut for entry/all).</summary>
+    [HttpGet("{id}/entry/all")]
+    [ProducesResponseType(typeof(FormEntryAllResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ListEntriesGet(
+        string id,
+        [FromQuery] int currentPage = 1,
+        [FromQuery] int itemsPerPage = 20,
+        [FromQuery] bool includeFormJson = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return NotFound();
+
+        try
+        {
+            var result = await _formEntryService.ListEntriesAsync(
+                id,
+                new FormEntryAllRequest(
+                    CurrentPage: currentPage,
+                    ItemsPerPage: itemsPerPage,
+                    IncludeFormJson: includeFormJson),
+                cancellationToken);
+            if (result.Status != FormEntryGetStatus.Found)
+                return NotFound();
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     /// <summary>Get form entry by itemId (v5 GET /api/form/{id}/entry/{entryId}).</summary>
     [HttpGet("{id}/entry/{entryId:int}")]
     [ProducesResponseType(typeof(IReadOnlyList<Dictionary<string, object?>>), StatusCodes.Status200OK)]
@@ -281,3 +435,9 @@ public sealed class FormController : ControllerBase
             (string.Equals(c.Value, "Admin", StringComparison.OrdinalIgnoreCase) ||
              string.Equals(c.Value, "Administrator", StringComparison.OrdinalIgnoreCase)));
 }
+
+public sealed record FormMasterFileUploadResponse(
+    int MasterFileProcessId,
+    string FilePath,
+    int? NotificationId,
+    string? HangfireJobId);

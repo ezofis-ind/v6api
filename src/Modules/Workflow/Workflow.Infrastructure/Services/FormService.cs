@@ -674,13 +674,8 @@ VALUES({vals});";
         await createCmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static string EscapeSqlIdentifier(string name)
-    {
-        var safe = new string(name.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
-        if (string.IsNullOrEmpty(safe))
-            throw new InvalidOperationException($"Invalid field id for SQL column: {name}");
-        return safe.Replace("]", "]]");
-    }
+    private static string EscapeSqlIdentifier(string name) =>
+        EzfbColumnNaming.ToSqlBracketIdentifier(name);
 
     private static async Task<object> ResolveTenantKeyAsync(SqlConnection conn, Guid tenantGuid, CancellationToken cancellationToken)
     {

@@ -91,6 +91,40 @@ public sealed class LoginController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Social login (Google / Microsoft). Email + provider only — no password.
+    /// User must exist with matching loginType/authStrategy (GOOGLE or MICROSOFT).
+    /// </summary>
+    [HttpPost("social/login")]
+    [ProducesResponseType(typeof(LoginSuccess), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> SocialLogin([FromBody] SocialLoginRequest request, CancellationToken cancellationToken)
+    {
+        var tenantId = _tenantProvider.GetTenantId();
+        if (tenantId == null)
+            return BadRequest(new { error = "X-Tenant-Id header is required to select organization." });
+
+        try
+        {
+            var result = await _authService.SocialLoginAsync(request.Email, request.Provider, tenantId.Value, cancellationToken);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogError(ex, "Social login failed due to configuration or user profile data.");
+            return StatusCode(StatusCodes.Status500InternalServerError, BuildLoginConfigError(ex));
+        }
+    }
+
     private object BuildLoginConfigError(InvalidOperationException ex)
     {
         var showDetails = _environment.IsDevelopment()
@@ -106,3 +140,6 @@ public record LoginRequest(string Email, string Password);
 
 /// <summary>TempToken from login response when 2FA required; Code from authenticator app. Requires X-Tenant-Id header.</summary>
 public record CompleteTwoFactorRequest(string TempToken, string Code);
+
+/// <summary>Social login: email + provider (google or microsoft). Requires X-Tenant-Id header. No password.</summary>
+public record SocialLoginRequest(string Email, string Provider);

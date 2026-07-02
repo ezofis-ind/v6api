@@ -51,6 +51,7 @@ public static class ApAgentMetadataParser
             ["Cost Center"] = "CostCenter",
             ["Matched Status"] = "MatchedStatus",
             ["PoNumber"] = "PoNumber",
+            ["PONumber"] = "PoNumber",
             ["PO Number"] = "PoNumber",
         };
 

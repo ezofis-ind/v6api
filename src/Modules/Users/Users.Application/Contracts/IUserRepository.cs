@@ -17,6 +17,15 @@ public interface IUserRepository
     /// <summary>List all users (excluding soft-deleted) ordered by DisplayName.</summary>
     Task<IReadOnlyList<User>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Count how many of the given user IDs exist in the current tenant.</summary>
+    Task<int> CountExistingByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);
+
+    /// <summary>Updates Users.Role from oldName to newName for users in the current tenant (case-insensitive match).</summary>
+    Task<IReadOnlyList<string>> RenameRoleForUsersAsync(
+        string oldRoleName,
+        string newRoleName,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Mark user as modified for persistence.</summary>
     void Update(User user);
 

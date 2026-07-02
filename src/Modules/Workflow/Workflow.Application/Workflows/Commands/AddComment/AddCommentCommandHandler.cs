@@ -1,5 +1,6 @@
 using MediatR;
 using SaaSApp.Workflow.Application.Contracts;
+using SaaSApp.Workflow.Application.Workflows;
 
 namespace SaaSApp.Workflow.Application.Workflows.Commands.AddComment;
 
@@ -23,6 +24,18 @@ public sealed class AddCommentCommandHandler : IRequestHandler<AddCommentCommand
         var instance = await _workflowRepository.GetInstanceByIdAsync(request.WorkflowInstanceId, cancellationToken);
         WorkflowInstanceScopeValidator.EnsureInstanceBelongsToWorkflow(instance, request.WorkflowId, request.WorkflowInstanceId);
 
+        var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowComments");
+
+        if (WorkflowCommentHelper.IsProceedActionSystemComment(request.Comments))
+        {
+            return new AddCommentCommandResult(
+                Guid.Empty,
+                request.WorkflowId,
+                request.WorkflowInstanceId,
+                tableName,
+                Skipped: true);
+        }
+
         var commentId = await _dynamicTableRepository.AddCommentAsync(
             request.WorkflowId,
             request.WorkflowInstanceId,
@@ -32,8 +45,6 @@ public sealed class AddCommentCommandHandler : IRequestHandler<AddCommentCommand
             request.ExternalCommentsBy,
             request.ShowTo,
             cancellationToken);
-
-        var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowComments");
 
         return new AddCommentCommandResult(commentId, request.WorkflowId, request.WorkflowInstanceId, tableName);
     }

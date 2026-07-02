@@ -28,4 +28,10 @@ public interface IFormEntryService
         string formId,
         string entryIds,
         CancellationToken cancellationToken = default);
+
+    /// <summary>List form entries for a form (v5 POST /api/form/{id}/entry/all).</summary>
+    Task<FormEntryAllResult> ListEntriesAsync(
+        string formId,
+        FormEntryAllRequest request,
+        CancellationToken cancellationToken = default);
 }

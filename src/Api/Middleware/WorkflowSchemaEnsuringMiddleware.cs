@@ -37,7 +37,11 @@ public sealed class WorkflowSchemaEnsuringMiddleware
 
         if (!AppliedTenants.ContainsKey(tenantId.Value))
         {
-            await schemaService.ApplySchemaAsync(conn, context.RequestAborted);
+            await TenantSchemaEnsureHelper.EnsureWorkflowSchemaAsync(
+                tenantId.Value,
+                conn,
+                () => schemaService.ApplySchemaAsync(conn, context.RequestAborted),
+                context.RequestAborted);
             AppliedTenants.TryAdd(tenantId.Value, 0);
         }
 

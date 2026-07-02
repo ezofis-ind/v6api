@@ -85,10 +85,7 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
                 "Use POST /api/repositories/{id}/items/upload for the standard flat path.");
         }
 
-        RepositoryFolderMetadataResolver.TryApplyFilenameAsLeafMetadata(
-            fieldValues,
-            folderFieldDefs,
-            request.FileName);
+        RepositoryArchiveFileNameResolver.EnsureMandatoryNamingMetadata(repo.Fields, fieldValues);
 
         var folderPath = await _folderService.ResolveOrCreateFolderPathAsync(
             repositoryId,
@@ -98,19 +95,26 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
             cancellationToken)
             ?? throw new InvalidOperationException("Folder structure could not be resolved.");
 
+        var leafFolderId = folderPath.LeafFolderId == Guid.Empty ? (Guid?)null : folderPath.LeafFolderId;
+
         var connectionString = _connectionProvider.ConnectionString
             ?? throw new InvalidOperationException("Tenant connection string not resolved.");
 
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
 
-        var baseFileName = RepositoryFilePathHelper.GetBaseFileName(request.FileName);
+        var archiveBaseFileName = RepositoryArchiveFileNameResolver.ResolveArchiveBaseFileName(
+            repo.Fields,
+            fieldValues,
+            request.FileName);
+
+        var baseFileName = RepositoryFilePathHelper.GetBaseFileName(archiveBaseFileName);
         var fileVersion = await RepositoryItemVersionResolver.ResolveNextFileVersionAsync(
             connection,
             repo.ItemsTableName,
             tenantId,
             repositoryId,
-            folderPath.LeafFolderId,
+            leafFolderId,
             baseFileName,
             cancellationToken);
 
@@ -119,7 +123,7 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
         var storageRelativePath = RepositoryFilePathHelper.BuildArchiveRelativePath(
             folderPath.RepositoryName,
             folderPath.FolderNames,
-            request.FileName,
+            archiveBaseFileName,
             fileVersion);
 
         var relativePath = await _fileStorage.SaveAsync(
@@ -157,7 +161,7 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
             null,
             null,
             null,
-            folderPath.LeafFolderId,
+            leafFolderId,
             request.InstanceId,
             fieldValues,
             fileVersion);

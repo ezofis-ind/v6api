@@ -76,7 +76,7 @@ internal static class RepositoryItemMetadataUpdateHelper
         HashSet<string> allowedColumns,
         HashSet<string> tableColumns)
     {
-        var updates = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var updates = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (key, rawValue) in metadata)
         {
@@ -86,7 +86,11 @@ internal static class RepositoryItemMetadataUpdateHelper
             if (!RepositoryItemTableColumns.Has(tableColumns, logicalCol) || ReadOnlyColumns.Contains(logicalCol))
                 continue;
 
-            updates[logicalCol] = CoerceValue(logicalCol, rawValue);
+            var column = RepositoryItemTableColumns.TryGetCanonicalName(tableColumns, logicalCol, out var canonicalCol)
+                ? canonicalCol
+                : logicalCol;
+
+            updates[column] = CoerceValue(column, rawValue);
         }
 
         return updates;

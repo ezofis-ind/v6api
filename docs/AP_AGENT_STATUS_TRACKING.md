@@ -239,7 +239,31 @@ async function pollApAgentStatus(jobId, token, tenantId) {
 
 ---
 
-## 5. Swagger
+## 5. Parallel jobs (multi-tenant)
+
+AP Agent Hangfire jobs **run in parallel** — one job per workflow start, no global queue lock.
+
+| Layer | Concurrency |
+|-------|-------------|
+| **Hangfire (.NET)** | Up to `Hangfire:WorkerCount` jobs at once (default **10**). Each customer/tenant start gets its own job. |
+| **Python** | Must scale separately (e.g. multiple uvicorn/gunicorn workers). Python should accept the POST quickly and process OCR in the background. |
+
+**appsettings:**
+
+```json
+"Hangfire": {
+  "RunServerInApi": true,
+  "WorkerCount": 10
+}
+```
+
+Increase `WorkerCount` when many customers start workflows at the same time (e.g. 20–50 for heavy load).
+
+**Python team:** If the `/api/ap-agent/run` endpoint blocks until OCR finishes, parallel Hangfire jobs will still pile up waiting on Python. Return **202 Accepted** quickly and run OCR in a worker thread/process.
+
+---
+
+## 6. Swagger
 
 Open Swagger UI (`/swagger` in Development) and look under **Workflows**:
 

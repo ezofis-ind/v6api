@@ -13,7 +13,6 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
     private readonly ITenantContext _tenantContext;
     private readonly ICurrentUserProvider _currentUserProvider;
     private readonly IWorkflowTableCreator _tableCreator;
-    private readonly IWorkflowLegacyTransactionSyncService _legacyTransactionSync;
     private readonly IWorkflowStartBootstrapService _startBootstrap;
     private readonly IApAgentPythonJobClient _apAgentPythonJobClient;
     private readonly ILogger<StartWorkflowCommandHandler> _logger;
@@ -24,7 +23,6 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
         ITenantContext tenantContext,
         ICurrentUserProvider currentUserProvider,
         IWorkflowTableCreator tableCreator,
-        IWorkflowLegacyTransactionSyncService legacyTransactionSync,
         IWorkflowStartBootstrapService startBootstrap,
         IApAgentPythonJobClient apAgentPythonJobClient,
         ILogger<StartWorkflowCommandHandler> logger)
@@ -34,7 +32,6 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
         _tenantContext = tenantContext;
         _currentUserProvider = currentUserProvider;
         _tableCreator = tableCreator;
-        _legacyTransactionSync = legacyTransactionSync;
         _startBootstrap = startBootstrap;
         _apAgentPythonJobClient = apAgentPythonJobClient;
         _logger = logger;
@@ -55,8 +52,7 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
         var connectionString = _tenantContext.ConnectionString
             ?? throw new InvalidOperationException("Tenant connection string not resolved.");
 
-        await _tableCreator.CreateWorkflowTablesAsync(workflow.Id, connectionString, cancellationToken);
-        await _tableCreator.EnsureLegacyTransactionTableAsync(workflow.Id, connectionString, cancellationToken);
+        await _tableCreator.EnsureWorkflowTablesForStartAsync(workflow.Id, connectionString, cancellationToken);
 
         var instance = WorkflowInstance.Create(tenantId, workflow.Id, workflow.Name, workflow.Version, userId, request.Context);
         instance.Start();
@@ -99,43 +95,6 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
         await _repository.AddInstanceAsync(instance, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        int? firstTransactionId = null;
-        var firstDefinitionStep = workflow.Steps.OrderBy(s => s.Order).FirstOrDefault();
-        if (firstDefinitionStep != null)
-        {
-            var firstActivityId = !string.IsNullOrWhiteSpace(firstDefinitionStep.ActivityId)
-                ? firstDefinitionStep.ActivityId
-                : firstDefinitionStep.Id.ToString("D");
-
-            var sync = await _legacyTransactionSync.SyncTransactionByActivityIdAsync(
-                workflow.Id,
-                instance.Id,
-                instance.ReferenceNumber,
-                firstDefinitionStep,
-                workflow.Steps.OrderBy(s => s.Order).ToList(),
-                firstActivityId,
-                userId,
-                firstDefinitionStep.AssignedToUserId ?? userId,
-                review: null,
-                mailboxForm: null,
-                cancellationToken);
-
-            firstTransactionId = sync.CurrentTransactionId;
-
-            if (sync.WorkflowInstanceId != instance.Id)
-            {
-                throw new InvalidOperationException(
-                    $"Transaction row was not linked to workflow instance {instance.Id:D}.");
-            }
-
-            _logger.LogInformation(
-                "Started workflow {WorkflowId}: instance {WorkflowInstanceId}, first transaction {TransactionId}, status {SyncStatus}",
-                workflow.Id,
-                instance.Id,
-                firstTransactionId,
-                sync.Status);
-        }
-
         Stream? attachmentStream = null;
         if (request.Attachment is { Content.Length: > 0 } att)
             attachmentStream = new MemoryStream(att.Content);
@@ -147,12 +106,19 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
                     workflow,
                     instance,
                     userId,
-                    firstTransactionId,
+                    StartTransactionId: null,
                     request.EnvType,
                     attachmentStream,
                     request.Attachment?.FileName,
                     request.Attachment?.ContentType),
                 cancellationToken);
+
+            _logger.LogInformation(
+                "Started workflow {WorkflowId}: instance {WorkflowInstanceId}, first transaction {FirstTransactionId}, current transaction {CurrentTransactionId}",
+                workflow.Id,
+                instance.Id,
+                bootstrap.FirstTransactionId,
+                bootstrap.CurrentTransactionId);
 
             string? apAgentJobId = null;
             if (request.TriggerApAgentPythonJob
@@ -175,7 +141,7 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
 
             return new StartWorkflowCommandResult(
                 instance.Id,
-                firstTransactionId,
+                bootstrap.FirstTransactionId,
                 bootstrap.CurrentTransactionId,
                 bootstrap.FormEntryId,
                 bootstrap.ApAgentStepInstanceId,

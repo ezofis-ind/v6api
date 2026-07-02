@@ -1,5 +1,7 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using SaaSApp.Api.Options;
 using SaaSApp.Catalog;
 using SaaSApp.Catalog.Entities;
 using SaaSApp.Catalog.Persistence;
@@ -45,6 +47,7 @@ public sealed class TenantSignupService : ITenantSignupService
     private readonly IUserTenantRegistry _userTenantRegistry;
     private readonly IRepositorySchemaService _repositorySchema;
     private readonly IRepositoryStorageSeedService _repositoryStorageSeed;
+    private readonly TenantPilotUserOptions _pilotUserOptions;
 
     public TenantSignupService(
         ITenantDatabaseCreator dbCreator,
@@ -52,7 +55,8 @@ public sealed class TenantSignupService : ITenantSignupService
         IConfiguration configuration,
         IUserTenantRegistry userTenantRegistry,
         IRepositorySchemaService repositorySchema,
-        IRepositoryStorageSeedService repositoryStorageSeed)
+        IRepositoryStorageSeedService repositoryStorageSeed,
+        IOptions<TenantPilotUserOptions> pilotUserOptions)
     {
         _dbCreator = dbCreator;
         _catalogFactory = catalogFactory;
@@ -60,6 +64,7 @@ public sealed class TenantSignupService : ITenantSignupService
         _userTenantRegistry = userTenantRegistry;
         _repositorySchema = repositorySchema;
         _repositoryStorageSeed = repositoryStorageSeed;
+        _pilotUserOptions = pilotUserOptions.Value;
     }
 
     public async Task<TenantSignupResult> SignupAsync(TenantSignupRequest request, CancellationToken cancellationToken = default)
@@ -153,9 +158,25 @@ public sealed class TenantSignupService : ITenantSignupService
             var adminEmail = request.Email?.Trim();
             if (!string.IsNullOrEmpty(adminEmail))
             {
-                await CreateAdminUserAsync(tenantConnectionString, tenantId, adminEmail, displayName, request.Password, request.LoginType, request.FirstName, request.LastName, cancellationToken);
+                await CreateTenantUserAsync(
+                    tenantConnectionString,
+                    tenantId,
+                    adminEmail,
+                    displayName,
+                    request.Password,
+                    User.RoleAdmin,
+                    request.LoginType,
+                    request.FirstName,
+                    request.LastName,
+                    cancellationToken);
                 await _userTenantRegistry.AddOrUpdateAsync(adminEmail, tenantId, User.RoleAdmin, cancellationToken);
             }
+
+            await CreatePilotUserIfConfiguredAsync(
+                tenantConnectionString,
+                tenantId,
+                adminEmail,
+                cancellationToken);
         }
 
         return new TenantSignupResult(tenantId, displayName, dbName, tenantConnectionString);
@@ -185,7 +206,61 @@ public sealed class TenantSignupService : ITenantSignupService
         await context.Database.MigrateAsync(cancellationToken);
     }
 
-    private static async Task CreateAdminUserAsync(string tenantConnectionString, Guid tenantId, string email, string displayName, string? password, string? loginType, string? firstName, string? lastName, CancellationToken cancellationToken)
+    private async Task CreatePilotUserIfConfiguredAsync(
+        string tenantConnectionString,
+        Guid tenantId,
+        string? adminEmail,
+        CancellationToken cancellationToken)
+    {
+        if (!_pilotUserOptions.Enabled)
+            return;
+
+        var pilotEmail = _pilotUserOptions.Email?.Trim();
+        if (string.IsNullOrWhiteSpace(pilotEmail))
+            return;
+
+        if (string.IsNullOrWhiteSpace(_pilotUserOptions.Password))
+            return;
+
+        if (string.Equals(pilotEmail, adminEmail, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        await CreateTenantUserAsync(
+            tenantConnectionString,
+            tenantId,
+            pilotEmail,
+            string.IsNullOrWhiteSpace(_pilotUserOptions.DisplayName)
+                ? "AP Agent Pilot"
+                : _pilotUserOptions.DisplayName.Trim(),
+            _pilotUserOptions.Password,
+            string.IsNullOrWhiteSpace(_pilotUserOptions.Role)
+                ? User.RoleTenantUser
+                : _pilotUserOptions.Role.Trim(),
+            "EZOFIS",
+            firstName: "AP Agent",
+            lastName: "Pilot",
+            cancellationToken);
+
+        await _userTenantRegistry.AddOrUpdateAsync(
+            pilotEmail,
+            tenantId,
+            string.IsNullOrWhiteSpace(_pilotUserOptions.Role)
+                ? User.RoleTenantUser
+                : _pilotUserOptions.Role.Trim(),
+            cancellationToken);
+    }
+
+    private static async Task CreateTenantUserAsync(
+        string tenantConnectionString,
+        Guid tenantId,
+        string email,
+        string displayName,
+        string? password,
+        string role,
+        string? loginType,
+        string? firstName,
+        string? lastName,
+        CancellationToken cancellationToken)
     {
         var optionsBuilder = new DbContextOptionsBuilder<UsersDbContext>();
         optionsBuilder.UseSqlServer(tenantConnectionString, sql =>
@@ -198,11 +273,27 @@ public sealed class TenantSignupService : ITenantSignupService
         });
         var tenantProvider = new StaticTenantProvider(tenantId);
         await using var context = new UsersDbContext(optionsBuilder.Options, tenantProvider);
-        var admin = User.Create(tenantId, email, displayName, User.RoleAdmin, firstName?.Trim(), lastName?.Trim(), User.AuthStrategyEzofis);
-        admin.SetLoginType(loginType ?? "EZOFIS");
+
+        var normalizedEmail = email.Trim();
+        var exists = await context.Users.AnyAsync(
+            u => u.Email == normalizedEmail && !u.IsDeleted,
+            cancellationToken);
+        if (exists)
+            return;
+
+        var user = User.Create(
+            tenantId,
+            normalizedEmail,
+            displayName,
+            role,
+            firstName?.Trim(),
+            lastName?.Trim(),
+            User.AuthStrategyEzofis);
+        user.SetLoginType(loginType ?? "EZOFIS");
         if (!string.IsNullOrWhiteSpace(password))
-            admin.SetPasswordHash(BCrypt.Net.BCrypt.HashPassword(password.Trim()));
-        context.Users.Add(admin);
+            user.SetPasswordHash(BCrypt.Net.BCrypt.HashPassword(password.Trim()));
+
+        context.Users.Add(user);
         await context.SaveChangesAsync(cancellationToken);
     }
 

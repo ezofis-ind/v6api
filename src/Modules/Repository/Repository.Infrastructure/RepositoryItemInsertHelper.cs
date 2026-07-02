@@ -70,11 +70,15 @@ internal static class RepositoryItemInsertHelper
             if (!RepositoryItemFilterHelper.TryResolveFilterColumn(key, allowedColumns, repo, out var col))
                 continue;
 
-            if (!RepositoryItemTableColumns.Has(tableColumns, col) || !usedColumns.Add(col))
+            var column = RepositoryItemTableColumns.TryGetCanonicalName(tableColumns, col, out var canonicalCol)
+                ? canonicalCol
+                : col;
+
+            if (!RepositoryItemTableColumns.Has(tableColumns, column) || !usedColumns.Add(column))
                 continue;
 
             var param = $"@F{extraIndex++}";
-            columns.Add($"[{col}]");
+            columns.Add($"[{column}]");
             values.Add(param);
             parameters.Add(new SqlParameter(param, value));
         }

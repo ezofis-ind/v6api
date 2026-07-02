@@ -16,6 +16,7 @@ public static class UsersApplicationServiceCollectionExtensions
         });
 
         services.AddScoped<Contracts.ITenantContext, TenantContext>();
+        services.AddScoped<IPermissionValidator, Roles.PermissionValidator>();
         services.AddScoped(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
 
         return services;
