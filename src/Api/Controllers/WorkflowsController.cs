@@ -1263,17 +1263,52 @@ public sealed class WorkflowsController : ControllerBase
     }
 
     /// <summary>Get AP Agent Hangfire job status (queued / processing / completed / failed) plus live stage message from Python.</summary>
+    [HttpGet("ap-agent/jobs")]
+    [ProducesResponseType(typeof(ApAgentJobStatusListResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetApAgentJobStatuses(
+        [FromQuery] string jobIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = ParseApAgentJobIds(jobIds);
+        if (ids.Count == 0)
+            return BadRequest(new { error = "jobIds is required (comma-separated Hangfire job ids, e.g. id1,id2,id3)." });
+
+        var result = await _apAgentJobStatus.GetStatusesAsync(ids, cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>Get one or more AP Agent job statuses. Pass a single id, or comma-separated ids (e.g. id1,id2,id3).</summary>
     [HttpGet("ap-agent/jobs/{jobId}")]
     [ProducesResponseType(typeof(ApAgentJobStatusResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApAgentJobStatusListResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetApAgentJobStatus(string jobId, CancellationToken cancellationToken)
     {
+        if (jobId.Contains(',', StringComparison.Ordinal))
+        {
+            var ids = ParseApAgentJobIds(jobId);
+            if (ids.Count == 0)
+                return BadRequest(new { error = "At least one job id is required." });
+
+            var result = await _apAgentJobStatus.GetStatusesAsync(ids, cancellationToken);
+            return Ok(result);
+        }
+
         var status = await _apAgentJobStatus.GetStatusAsync(jobId, cancellationToken);
         if (status == null)
             return NotFound(new { error = $"AP Agent job '{jobId}' not found." });
 
         return Ok(status);
     }
+
+    private static List<string> ParseApAgentJobIds(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
     /// <summary>Python AP Agent progress callback by Hangfire job id (OCR running, extracting invoice, etc.).</summary>
     [HttpPatch("ap-agent/jobs/{jobId}/progress")]

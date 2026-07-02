@@ -1,0 +1,24 @@
+namespace SaaSApp.Catalog.Entities;
+
+/// <summary>Cross-tenant read-only grant for a repository item (stored in catalog DB).</summary>
+public sealed class RepositoryItemShare
+{
+    public Guid Id { get; set; }
+    public string ShareToken { get; set; } = null!;
+    public Guid SourceTenantId { get; set; }
+    public Guid SourceRepositoryId { get; set; }
+    public Guid SourceItemId { get; set; }
+    public Guid SharedByUserId { get; set; }
+    public string RecipientEmail { get; set; } = null!;
+    public string? Message { get; set; }
+    public string Status { get; set; } = ShareStatuses.Active;
+    public DateTime ExpiresAtUtc { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime? LastAccessedAtUtc { get; set; }
+}
+
+public static class ShareStatuses
+{
+    public const string Active = "Active";
+    public const string Revoked = "Revoked";
+}

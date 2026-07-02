@@ -325,6 +325,38 @@ public class ApAgentStatusExampleFilter : IOperationFilter
         }
         """;
 
+    private const string BulkStatusResponseSampleJson = """
+        {
+          "items": [
+            {
+              "jobId": "12345",
+              "workflowId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "instanceId": "f0e1d2c3-b4a5-6789-0123-456789abcdef",
+              "hangfireStatus": "Processing",
+              "stage": "OCR_RUNNING",
+              "message": "Running OCR on invoice PDF",
+              "percent": 25,
+              "errorMessage": null,
+              "updatedAtUtc": "2026-06-15T10:30:45.123Z",
+              "isTerminal": false
+            },
+            {
+              "jobId": "67890",
+              "workflowId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "instanceId": "11111111-2222-3333-4444-555555555555",
+              "hangfireStatus": "Succeeded",
+              "stage": "COMPLETED",
+              "message": "Invoice extraction finished",
+              "percent": 100,
+              "errorMessage": null,
+              "updatedAtUtc": "2026-06-15T10:35:00.000Z",
+              "isTerminal": true
+            }
+          ],
+          "notFoundJobIds": []
+        }
+        """;
+
     public void Apply(OpenApiOperation operation, OperationFilterContext context)
     {
         var path = context.ApiDescription.RelativePath ?? "";
@@ -364,6 +396,8 @@ public class ApAgentStatusExampleFilter : IOperationFilter
             && !path.Contains("progress", StringComparison.OrdinalIgnoreCase)
             && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
         {
+            var isBulkQuery = path.TrimEnd('/').EndsWith("ap-agent/jobs", StringComparison.OrdinalIgnoreCase);
+
             operation.Responses.TryGetValue("200", out var okResponse);
             okResponse ??= new OpenApiResponse { Description = "Current job status" };
             okResponse.Content ??= new Dictionary<string, OpenApiMediaType>();
@@ -373,13 +407,24 @@ public class ApAgentStatusExampleFilter : IOperationFilter
             });
             if (okResponse.Content.TryGetValue("application/json", out var jsonContent))
             {
-                jsonContent.Example = OpenApiAnyFactory.CreateFromJson(StatusResponseSampleJson);
+                jsonContent.Example = OpenApiAnyFactory.CreateFromJson(
+                    isBulkQuery ? BulkStatusResponseSampleJson : StatusResponseSampleJson);
             }
 
             operation.Responses["200"] = okResponse;
-            operation.Summary ??= "Get AP Agent job status (frontend polling)";
-            operation.Description = """
+            operation.Summary ??= isBulkQuery
+                ? "Get multiple AP Agent job statuses (frontend polling)"
+                : "Get AP Agent job status (frontend polling)";
+            operation.Description = isBulkQuery
+                ? """
+                **Frontend team:** poll with comma-separated Hangfire job ids, e.g. `?jobIds=12345,67890`.
+
+                Returns `items` (found jobs) and `notFoundJobIds` (missing ids). Poll every **5 seconds** until every item has `isTerminal` true.
+                """.Trim()
+                : """
                 **Frontend team:** poll this endpoint every **5 seconds** after workflow start returns `apAgentJobId`.
+
+                For multiple jobs use **GET** `/api/workflows/ap-agent/jobs?jobIds=id1,id2,id3` or pass comma-separated ids in `{jobId}` (e.g. `id1,id2,id3`).
 
                 Stop polling when `isTerminal` is `true` (`Succeeded`, `Failed`, or `Deleted`).
 

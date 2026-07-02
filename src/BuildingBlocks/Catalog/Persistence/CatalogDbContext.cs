@@ -16,6 +16,7 @@ public sealed class CatalogDbContext : DbContext
     public DbSet<UserTenant> UserTenants => Set<UserTenant>();
     public DbSet<MailSetting> MailSettings => Set<MailSetting>();
     public DbSet<OtpVerification> OtpVerifications => Set<OtpVerification>();
+    public DbSet<RepositoryItemShare> RepositoryItemShares => Set<RepositoryItemShare>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -45,6 +46,19 @@ public sealed class CatalogDbContext : DbContext
             entity.Property(e => e.Role).HasMaxLength(64).IsRequired();
             entity.Property(e => e.CreatedAtUtc);
             entity.HasIndex(e => new { e.Email, e.TenantId }).IsUnique();
+        });
+
+        modelBuilder.Entity<RepositoryItemShare>(entity =>
+        {
+            entity.ToTable("RepositoryItemShares");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ShareToken).HasMaxLength(128).IsRequired();
+            entity.Property(e => e.RecipientEmail).HasMaxLength(256).IsRequired();
+            entity.Property(e => e.Message).HasMaxLength(2000);
+            entity.Property(e => e.Status).HasMaxLength(32).IsRequired();
+            entity.HasIndex(e => e.ShareToken).IsUnique();
+            entity.HasIndex(e => new { e.RecipientEmail, e.Status });
+            entity.HasIndex(e => new { e.SourceTenantId, e.SourceRepositoryId, e.SourceItemId });
         });
 
         modelBuilder.Entity<MailSetting>(entity =>

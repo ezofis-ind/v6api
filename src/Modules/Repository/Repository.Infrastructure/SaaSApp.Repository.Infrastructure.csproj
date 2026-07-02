@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Repository.Application\SaaSApp.Repository.Application.csproj" />
     <ProjectReference Include="..\..\BlobStorage\SaaSApp.BlobStorage.csproj" />
     <ProjectReference Include="..\..\..\BuildingBlocks\MultiTenancy\SaaSApp.MultiTenancy.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\Catalog\SaaSApp.Catalog.csproj" />
   </ItemGroup>
 
   <ItemGroup>

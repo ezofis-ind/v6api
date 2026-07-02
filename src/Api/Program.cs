@@ -187,8 +187,8 @@ if (hangfireEnabled)
         // starves IIS/Kestrel threads and makes every API call feel slow.
         var apiWorkers = builder.Configuration.GetValue<int?>("Hangfire:ApiWorkerCount")
             ?? builder.Configuration.GetValue<int?>("Hangfire:WorkerCount")
-            ?? 2;
-        apiWorkers = Math.Clamp(apiWorkers, 1, 4);
+            ?? 5;
+        apiWorkers = Math.Clamp(apiWorkers, 1, 10);
 
         builder.Services.AddHangfireServer(options =>
         {
@@ -289,6 +289,7 @@ app.UseAuthorization();
 app.UseMiddleware<EmailTenantResolutionMiddleware>();
 // Resolve tenant DB connection from catalog (must run after auth so JWT/tid is available)
 app.UseMiddleware<TenantConnectionMiddleware>();
+app.UseMiddleware<RepositoryShareMiddleware>();
 // Ensure workflow schema exists in tenant DB before workflow operations
 app.UseMiddleware<WorkflowSchemaEnsuringMiddleware>();
 app.UseMiddleware<DmsSchemaEnsuringMiddleware>();

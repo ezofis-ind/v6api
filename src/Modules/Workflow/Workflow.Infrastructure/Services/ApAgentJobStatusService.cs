@@ -23,9 +23,43 @@ public sealed class ApAgentJobStatusService : IApAgentJobStatusService
         if (string.IsNullOrWhiteSpace(jobId))
             return null;
 
-        var row = await _progress.GetByJobIdAsync(jobId.Trim(), cancellationToken);
+        return await BuildStatusAsync(jobId.Trim(), cancellationToken);
+    }
+
+    public async Task<ApAgentJobStatusListResult> GetStatusesAsync(
+        IEnumerable<string> jobIds,
+        CancellationToken cancellationToken = default)
+    {
+        var uniqueIds = jobIds
+            .Select(id => id?.Trim())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Cast<string>()
+            .ToList();
+
+        if (uniqueIds.Count == 0)
+            return new ApAgentJobStatusListResult(Array.Empty<ApAgentJobStatusResult>(), Array.Empty<string>());
+
+        var items = new List<ApAgentJobStatusResult>(uniqueIds.Count);
+        var notFound = new List<string>();
+
+        foreach (var id in uniqueIds)
+        {
+            var status = await BuildStatusAsync(id, cancellationToken);
+            if (status == null)
+                notFound.Add(id);
+            else
+                items.Add(status);
+        }
+
+        return new ApAgentJobStatusListResult(items, notFound);
+    }
+
+    private async Task<ApAgentJobStatusResult?> BuildStatusAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var row = await _progress.GetByJobIdAsync(jobId, cancellationToken);
         // DB state drives UI: Hangfire marks Succeeded when POST returns; Python PATCH sets terminal state.
-        var hangfireState = row?.HangfireState ?? ResolveHangfireState(jobId.Trim()) ?? "Unknown";
+        var hangfireState = row?.HangfireState ?? ResolveHangfireState(jobId) ?? "Unknown";
 
         if (row == null && hangfireState == "Unknown")
             return null;
@@ -37,11 +71,11 @@ public sealed class ApAgentJobStatusService : IApAgentJobStatusService
         if (string.Equals(hangfireState, "Failed", StringComparison.OrdinalIgnoreCase)
             && string.IsNullOrWhiteSpace(errorMessage))
         {
-            errorMessage = TryGetHangfireExceptionMessage(jobId.Trim());
+            errorMessage = TryGetHangfireExceptionMessage(jobId);
         }
 
         return new ApAgentJobStatusResult(
-            jobId.Trim(),
+            jobId,
             row?.WorkflowId ?? Guid.Empty,
             row?.InstanceId ?? Guid.Empty,
             hangfireState,

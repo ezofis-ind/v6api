@@ -241,7 +241,9 @@ SELECT
 
     t.ActionStatus,
 
-    t.IsDeleted
+    t.IsDeleted,
+
+    t.ActivityUserId
 
 FROM {transactionTable} t
 
@@ -260,6 +262,8 @@ WHERE t.Id = @TransactionRowId;";
         int actionStatus;
 
         bool isDeleted;
+
+        Guid? activityUserId;
 
 
 
@@ -288,6 +292,8 @@ WHERE t.Id = @TransactionRowId;";
             actionStatus = reader.GetInt32(4);
 
             isDeleted = reader.GetBoolean(5);
+
+            activityUserId = reader.IsDBNull(6) ? null : reader.GetGuid(6);
 
         }
 
@@ -336,6 +342,17 @@ WHERE t.Id = @TransactionRowId;";
         }
         else
             await DeleteMailboxRowsForInstanceAsync(connection, workflowIdValue, workflowIdCompact, workflowInstanceId, workflowInstanceIdStr, inboxTable, cancellationToken);
+
+        if (targetTable == inboxTable && activityUserId is Guid assigneeId && assigneeId != Guid.Empty)
+            await DeleteSentRowsForInstanceAndUserAsync(
+                connection,
+                workflowIdValue,
+                workflowIdCompact,
+                workflowInstanceId,
+                workflowInstanceIdStr,
+                sentTable,
+                assigneeId,
+                cancellationToken);
 
 
 
@@ -574,6 +591,40 @@ DELETE FROM {completedTable} WHERE {keyPredicate};";
         cmd.Parameters.AddWithValue("@WorkflowTableKey", workflowTableKey);
         cmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
         cmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>Self-assign: remove sent row when the same user receives the instance back in inbox.</summary>
+    private static async Task DeleteSentRowsForInstanceAndUserAsync(
+        SqlConnection connection,
+        string workflowIdValue,
+        string workflowTableKey,
+        Guid workflowInstanceId,
+        string workflowInstanceIdStr,
+        string sentTable,
+        Guid assigneeUserId,
+        CancellationToken cancellationToken)
+    {
+        const string predicate = """
+            (workflowId = @WorkflowIdValue OR workflowId = @WorkflowTableKey)
+            AND (
+                workflowInstanceId = @WorkflowInstanceIdStr
+                OR TRY_CONVERT(UNIQUEIDENTIFIER, workflowInstanceId) = @WorkflowInstanceId
+            )
+            AND (
+                userId = @AssigneeUserId
+                OR TRY_CONVERT(UNIQUEIDENTIFIER, userId) = @AssigneeUserGuid
+            )
+            """;
+
+        var sql = $"DELETE FROM {sentTable} WHERE {predicate};";
+        await using var cmd = new SqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
+        cmd.Parameters.AddWithValue("@WorkflowTableKey", workflowTableKey);
+        cmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
+        cmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+        cmd.Parameters.AddWithValue("@AssigneeUserId", assigneeUserId.ToString("D"));
+        cmd.Parameters.AddWithValue("@AssigneeUserGuid", assigneeUserId);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 

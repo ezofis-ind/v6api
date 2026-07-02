@@ -289,6 +289,24 @@ EXISTS (
 """;
     }
 
+    /// <summary>Hide sent rows when the current user still has the same instance in inbox (self-assign).</summary>
+    private static string BuildSentExcludeOpenInboxForCurrentUserFilter(string transactionTable)
+    {
+        const string instanceJoin = "TRY_CONVERT(UNIQUEIDENTIFIER, m.workflowInstanceId) = tx_open.WorkflowInstanceId";
+        var assigneeMatch = BuildTransactionParticipantMatchSql("tx_open");
+        return $"""
+NOT EXISTS (
+    SELECT 1
+    FROM {transactionTable} tx_open
+    WHERE tx_open.IsDeleted = 0
+      AND tx_open.ActionStatus = 0
+      AND UPPER(LTRIM(RTRIM(ISNULL(tx_open.StageType, N'')))) <> N'END'
+      AND {instanceJoin}
+      AND {assigneeMatch}
+)
+""";
+    }
+
     /// <summary>Sent: ActionStatus 1. Completed: END stage.</summary>
     private static IEnumerable<string> BuildTransactionStateFilter(
         LegacyMailboxTableKind kind,
@@ -321,6 +339,8 @@ EXISTS (
       AND {participantMatch}
 )
 """;
+                // Same user still has an open inbox task — show inbox only, not sent.
+                yield return BuildSentExcludeOpenInboxForCurrentUserFilter(transactionTable);
                 break;
             case LegacyMailboxTableKind.Completed:
                 yield return $"""

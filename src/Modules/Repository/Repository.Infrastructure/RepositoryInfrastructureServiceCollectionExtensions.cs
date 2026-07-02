@@ -14,6 +14,7 @@ public static class RepositoryInfrastructureServiceCollectionExtensions
     {
         services.Configure<RepositoryFileStorageOptions>(configuration.GetSection(RepositoryFileStorageOptions.SectionName));
         services.Configure<RepositoryOcrOptions>(configuration.GetSection(RepositoryOcrOptions.SectionName));
+        services.Configure<RepositoryShareOptions>(configuration.GetSection(RepositoryShareOptions.SectionName));
         services.AddHttpClient<IOcrExtractionService, OcrExtractionService>();
         services.AddScoped<IRepositorySchemaService, RepositorySchemaService>();
         services.AddScoped<IRepositoryStorageSeedService, RepositoryStorageSeedService>();
@@ -29,6 +30,7 @@ public static class RepositoryInfrastructureServiceCollectionExtensions
         services.AddScoped<IRepositoryFileUploadService, RepositoryFileUploadService>();
         services.AddScoped<IRepositoryArchiveFileUploadService, RepositoryArchiveFileUploadService>();
         services.AddScoped<IRepositoryUploadIndexService, RepositoryUploadIndexService>();
+        services.AddScoped<IRepositoryItemShareService, RepositoryItemShareService>();
         services.AddScoped<ArchiveStageItemJob>();
         return services;
     }
