@@ -11,9 +11,19 @@ public interface IEzofisAuthService
 
     /// <summary>Social login (Google / Microsoft). Email + provider only; no password.</summary>
     Task<LoginResult> SocialLoginAsync(string email, string provider, Guid tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// First-time password for a workflow/repository guest share invite.
+    /// Validates shareToken + email, sets password, returns JWT.
+    /// </summary>
+    Task<LoginResult> SetShareInvitePasswordAsync(
+        string shareToken,
+        string email,
+        string password,
+        CancellationToken cancellationToken = default);
 }
 
-/// <summary>Result of Ezofis login: either success with JWT or 2FA required with temp token.</summary>
+/// <summary>Result of Ezofis login: success, 2FA required, or first-time password setup.</summary>
 public abstract record LoginResult;
 
 /// <summary>Login succeeded. Use AccessToken in Authorization: Bearer header.</summary>
@@ -21,3 +31,6 @@ public sealed record LoginSuccess(Guid UserId, string AccessToken, string TokenT
 
 /// <summary>2FA required. Call POST /api/auth/2fa/complete with TempToken and TOTP code. Send X-Tenant-Id: TenantId.</summary>
 public sealed record LoginRequiresTwoFactor(string TempToken, Guid TenantId, Guid UserId, int ExpiresInSeconds) : LoginResult;
+
+/// <summary>Guest-invited user must set password first. Call POST /api/auth/share/set-password.</summary>
+public sealed record LoginRequiresPasswordSetup(Guid TenantId, Guid UserId, string Email, string? ShareToken) : LoginResult;

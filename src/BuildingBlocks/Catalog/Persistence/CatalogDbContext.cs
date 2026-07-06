@@ -59,6 +59,8 @@ public sealed class CatalogDbContext : DbContext
             entity.HasIndex(e => e.ShareToken).IsUnique();
             entity.HasIndex(e => new { e.RecipientEmail, e.Status });
             entity.HasIndex(e => new { e.SourceTenantId, e.SourceRepositoryId, e.SourceItemId });
+            entity.Property(e => e.AutoProvisionGuest);
+            entity.Property(e => e.WorkflowInstanceId);
         });
 
         modelBuilder.Entity<MailSetting>(entity =>

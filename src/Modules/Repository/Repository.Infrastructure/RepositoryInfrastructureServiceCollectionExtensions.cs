@@ -31,6 +31,7 @@ public static class RepositoryInfrastructureServiceCollectionExtensions
         services.AddScoped<IRepositoryArchiveFileUploadService, RepositoryArchiveFileUploadService>();
         services.AddScoped<IRepositoryUploadIndexService, RepositoryUploadIndexService>();
         services.AddScoped<IRepositoryItemShareService, RepositoryItemShareService>();
+        services.AddScoped<IShareGuestUserProvisioningService, ShareGuestUserProvisioningService>();
         services.AddScoped<ArchiveStageItemJob>();
         return services;
     }

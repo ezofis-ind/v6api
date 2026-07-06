@@ -18,6 +18,7 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
     private readonly ITenantConnectionStringResolver _connectionResolver;
     private readonly IRepositoryItemQueryService _itemQuery;
     private readonly IRepositoryFileStorage _fileStorage;
+    private readonly IShareGuestUserProvisioningService _guestProvisioning;
     private readonly RepositoryShareOptions _options;
     private readonly ILogger<RepositoryItemShareService> _logger;
 
@@ -26,6 +27,7 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
         ITenantConnectionStringResolver connectionResolver,
         IRepositoryItemQueryService itemQuery,
         IRepositoryFileStorage fileStorage,
+        IShareGuestUserProvisioningService guestProvisioning,
         IOptions<RepositoryShareOptions> options,
         ILogger<RepositoryItemShareService> logger)
     {
@@ -33,25 +35,70 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
         _connectionResolver = connectionResolver;
         _itemQuery = itemQuery;
         _fileStorage = fileStorage;
+        _guestProvisioning = guestProvisioning;
         _options = options.Value;
         _logger = logger;
     }
 
-    public async Task<CreateRepositoryItemShareResult> CreateShareAsync(
+    public Task<CreateRepositoryItemShareResult> CreateShareAsync(
         Guid sourceTenantId,
         Guid repositoryId,
         Guid itemId,
         Guid sharedByUserId,
         CreateRepositoryItemShareRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        CreateShareInternalAsync(
+            sourceTenantId,
+            repositoryId,
+            itemId,
+            sharedByUserId,
+            request.Email,
+            request.Message,
+            request.ProvisionGuestUser,
+            request.WorkflowInstanceId,
+            cancellationToken);
+
+    public Task<CreateRepositoryItemShareResult> CreateWorkflowInboxShareAsync(
+        Guid sourceTenantId,
+        Guid workflowInstanceId,
+        Guid repositoryId,
+        Guid itemId,
+        Guid sharedByUserId,
+        CreateWorkflowInboxShareRequest request,
+        CancellationToken cancellationToken = default) =>
+        CreateShareInternalAsync(
+            sourceTenantId,
+            repositoryId,
+            itemId,
+            sharedByUserId,
+            request.Email,
+            request.Message,
+            provisionGuestUser: true,
+            workflowInstanceId,
+            cancellationToken);
+
+    private async Task<CreateRepositoryItemShareResult> CreateShareInternalAsync(
+        Guid sourceTenantId,
+        Guid repositoryId,
+        Guid itemId,
+        Guid sharedByUserId,
+        string email,
+        string? message,
+        bool provisionGuestUser,
+        Guid? workflowInstanceId,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.Email) || request.Email.IndexOf('@') < 1)
+        if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') < 1)
             throw new ArgumentException("A valid recipient email is required.");
 
         var item = await _itemQuery.GetItemAsync(repositoryId, sourceTenantId, itemId, cancellationToken)
             ?? throw new InvalidOperationException("Repository item not found.");
 
-        var recipientEmail = request.Email.Trim().ToLowerInvariant();
+        var recipientEmail = email.Trim().ToLowerInvariant();
+
+        if (provisionGuestUser)
+            await _guestProvisioning.EnsureGuestUserAsync(sourceTenantId, recipientEmail, cancellationToken);
+
         var shareToken = GenerateShareToken();
         var expiresAt = DateTime.UtcNow.AddDays(_options.DefaultExpiryDays <= 0 ? 30 : _options.DefaultExpiryDays);
         var shareId = Guid.NewGuid();
@@ -69,19 +116,41 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
                 SourceItemId = itemId,
                 SharedByUserId = sharedByUserId,
                 RecipientEmail = recipientEmail,
-                Message = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim(),
+                Message = string.IsNullOrWhiteSpace(message) ? null : message.Trim(),
                 Status = ShareStatuses.Active,
                 ExpiresAtUtc = expiresAt,
-                CreatedAtUtc = DateTime.UtcNow
+                CreatedAtUtc = DateTime.UtcNow,
+                AutoProvisionGuest = provisionGuestUser,
+                WorkflowInstanceId = workflowInstanceId
             });
             await catalog.SaveChangesAsync(cancellationToken);
         }
 
         var shareUrl = BuildShareUrl(shareToken, recipientEmail);
-        await TrySendShareEmailAsync(recipientEmail, item.FileName, shareUrl, request.Message, cancellationToken);
+        await TrySendShareEmailAsync(
+            recipientEmail,
+            item.FileName,
+            shareUrl,
+            message,
+            provisionGuestUser,
+            cancellationToken);
 
         return new CreateRepositoryItemShareResult(
             shareId, shareToken, repositoryId, itemId, recipientEmail, expiresAt, shareUrl);
+    }
+
+    public async Task<bool> RecipientRequiresPasswordSetupAsync(
+        string shareToken,
+        CancellationToken cancellationToken = default)
+    {
+        var share = await LoadActiveShareAsync(shareToken, cancellationToken, requireViewerEmail: false);
+        if (share == null || !share.AutoProvisionGuest)
+            return false;
+
+        return await _guestProvisioning.RequiresPasswordSetupAsync(
+            share.SourceTenantId,
+            share.RecipientEmail,
+            cancellationToken);
     }
 
     public async Task<RepositoryShareAccess?> ResolveShareAccessAsync(
@@ -126,16 +195,25 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
             connectionString, repo, share.SourceRepositoryId, share.SourceItemId, cancellationToken);
 
         var orgName = await GetTenantNameAsync(share.SourceTenantId, cancellationToken);
+        var requiresPasswordSetup = share.AutoProvisionGuest
+            && await _guestProvisioning.RequiresPasswordSetupAsync(
+                share.SourceTenantId,
+                share.RecipientEmail,
+                cancellationToken);
 
         return new RepositoryItemSharePreviewDto(
             share.ShareToken,
+            share.SourceTenantId,
             share.SourceRepositoryId,
             share.SourceItemId,
             item?.FileName,
             orgName,
             share.RecipientEmail,
             share.ExpiresAtUtc,
-            RequiresLogin: true);
+            RequiresLogin: true,
+            requiresPasswordSetup,
+            share.AutoProvisionGuest,
+            share.WorkflowInstanceId);
     }
 
     public async Task<IReadOnlyList<SharedWithMeItemDto>> ListSharesForRecipientAsync(
@@ -322,6 +400,7 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
         string? fileName,
         string shareUrl,
         string? message,
+        bool guestInvite,
         CancellationToken cancellationToken)
     {
         try
@@ -344,11 +423,14 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
             }
 
             var docLabel = string.IsNullOrWhiteSpace(fileName) ? "a document" : $"'{fileName}'";
+            var guestNote = guestInvite
+                ? "<p>An account has been created for you. Open the link, set your password, then view the shared file.</p>"
+                : "<p>If you do not have an account, sign up with this email address, then open the link again after login.</p>";
             var body = $"""
                 <p>A document has been shared with you: <strong>{WebUtility.HtmlEncode(docLabel)}</strong>.</p>
                 {(string.IsNullOrWhiteSpace(message) ? "" : $"<p>{WebUtility.HtmlEncode(message)}</p>")}
                 <p><a href="{WebUtility.HtmlEncode(shareUrl)}">Open shared document</a></p>
-                <p>If you do not have an account, sign up with this email address, then open the link again after login.</p>
+                {guestNote}
                 """;
 
             using var mail = new MailMessage

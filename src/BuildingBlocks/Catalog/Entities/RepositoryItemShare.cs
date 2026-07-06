@@ -15,6 +15,12 @@ public sealed class RepositoryItemShare
     public DateTime ExpiresAtUtc { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public DateTime? LastAccessedAtUtc { get; set; }
+
+    /// <summary>When true, recipient is auto-added to the source tenant (no password) for workflow inbox guest shares.</summary>
+    public bool AutoProvisionGuest { get; set; }
+
+    /// <summary>Optional workflow instance that originated this share (workflow inbox).</summary>
+    public Guid? WorkflowInstanceId { get; set; }
 }
 
 public static class ShareStatuses

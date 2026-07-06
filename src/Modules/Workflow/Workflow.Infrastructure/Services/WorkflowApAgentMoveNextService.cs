@@ -36,6 +36,33 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
             ["Cost Center"] = "CostCenter",
             ["Matched Status"] = "MatchedStatus",
             ["TERMS"] = "Terms",
+            ["PO Amount"] = "PoAmount",
+            ["Gross Amount"] = "Gross Amount",
+        };
+
+    /// <summary>po_row audit/system columns — never written to ezfb form.</summary>
+    private static readonly HashSet<string> PoRowMetadataFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "itemId", "createdAt", "modifiedAt", "createdBy", "modifiedBy", "isDeleted", "todayTask", "isMarked"
+    };
+
+    /// <summary>po_row business keys → alternate wFormControl names to try when matching form fields.</summary>
+    private static readonly Dictionary<string, string[]> PoRowFormFieldMatchCandidates =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PO Number"] = ["PO Number", "PoNumber", "PONumber"],
+            ["PO Amount"] = ["PO Amount", "PoAmount", "POAmount", "Gross Amount", "Amount"],
+            ["Gross Amount"] = ["Gross Amount", "PO Amount", "PoAmount", "POAmount", "Amount"],
+            ["Vendor"] = ["Vendor", "Vendor Name", "Supplier"],
+            ["Vendor Name"] = ["Vendor Name", "Vendor", "Supplier"],
+            ["PO Date"] = ["PO Date", "PO DATE", "DocumentDate"],
+            ["Bill-To Address"] = ["Bill-To Address", "Bill To Address"],
+            ["Ship-To Address"] = ["Ship-To Address", "Ship To Address"],
+            ["Terms Descr"] = ["Terms Descr", "Terms", "TERMS"],
+            ["Buyer Name"] = ["Buyer Name", "Buyer"],
+            ["Notes"] = ["Notes"],
+            ["PODetail"] = ["PODetail", "PO Detail"],
+            ["PO Line Item Mapped"] = ["PO Line Item Mapped", "PO TABLE", "PO Table"],
         };
 
     private readonly ITenantContext _tenantContext;
@@ -281,6 +308,234 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
         }
 
         return updated;
+    }
+
+    public async Task<int> ApplyPoRowFromStoredAgentValidationAsync(
+        Guid workflowId,
+        Guid workflowInstanceId,
+        string formId,
+        int formEntryId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(formId) || formEntryId <= 0)
+                return 0;
+
+            var agentResponseJson = await LoadLatestAgentResponseAsync(workflowId, workflowInstanceId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(agentResponseJson))
+            {
+                _logger.LogDebug(
+                    "No agent validation row for workflow {WorkflowId}, instance {InstanceId}; po_row form sync skipped.",
+                    workflowId,
+                    workflowInstanceId);
+                return 0;
+            }
+
+            var poRowFields = ExtractPoRowFields(agentResponseJson);
+            if (poRowFields.Count == 0)
+            {
+                _logger.LogDebug(
+                    "Agent response has no po_row fields for instance {InstanceId}; form sync skipped.",
+                    workflowInstanceId);
+                return 0;
+            }
+
+            var updated = await ApplyPoRowFieldsToEzfbAsync(formId, formEntryId, poRowFields, cancellationToken);
+            _logger.LogInformation(
+                "Applied {UpdatedCount} po_row field(s) from agentDataValidation to form {FormId} entry {FormEntryId} for instance {InstanceId}.",
+                updated,
+                formId,
+                formEntryId,
+                workflowInstanceId);
+            return updated;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "po_row form sync skipped for instance {InstanceId}; move-next transaction was not affected.",
+                workflowInstanceId);
+            return 0;
+        }
+    }
+
+    private async Task<string?> LoadLatestAgentResponseAsync(
+        Guid workflowId,
+        Guid workflowInstanceId,
+        CancellationToken cancellationToken)
+    {
+        var connectionString = _tenantContext.ConnectionString;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return null;
+
+        await _tableCreator.EnsureAgentDataValidationTableAsync(workflowId, connectionString, cancellationToken);
+
+        var suffix = workflowId.ToString("N")[..8];
+        var table = $"workflow.[agentDataValidation_{suffix}]";
+        var sql = $@"
+SELECT TOP 1 AgentResponse
+FROM {table}
+WHERE IsDeleted = 0
+  AND ProcessId = @ProcessId
+ORDER BY CreatedAt DESC, Id DESC;";
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var cmd = new SqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@ProcessId", workflowInstanceId);
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result == null || result == DBNull.Value ? null : Convert.ToString(result, CultureInfo.InvariantCulture);
+    }
+
+    internal static Dictionary<string, string> ExtractPoRowFields(string agentResponseJson)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(agentResponseJson))
+            return fields;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(agentResponseJson);
+            if (!doc.RootElement.TryGetProperty("po_row", out var poRow)
+                || poRow.ValueKind != JsonValueKind.Object)
+            {
+                return fields;
+            }
+
+            foreach (var prop in poRow.EnumerateObject())
+            {
+                if (PoRowMetadataFields.Contains(prop.Name))
+                    continue;
+
+                if (prop.Value.ValueKind == JsonValueKind.Null)
+                    continue;
+
+                var value = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString(),
+                    JsonValueKind.Number => prop.Value.GetRawText(),
+                    JsonValueKind.True => "true",
+                    JsonValueKind.False => "false",
+                    JsonValueKind.Array or JsonValueKind.Object => prop.Value.GetRawText(),
+                    _ => prop.Value.GetRawText()
+                };
+
+                if (!IsEmptyValue(value))
+                    fields[prop.Name] = value!;
+            }
+        }
+        catch (JsonException)
+        {
+            // Invalid stored agent JSON should not block move-next.
+            return fields;
+        }
+
+        return fields;
+    }
+
+    private async Task<int> ApplyPoRowFieldsToEzfbAsync(
+        string formId,
+        int formEntryId,
+        IReadOnlyDictionary<string, string> poRowFields,
+        CancellationToken cancellationToken)
+    {
+        if (poRowFields.Count == 0)
+            return 0;
+
+        var connectionString = _tenantContext.ConnectionString;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var normalizedFormId = FormIdNaming.NormalizeFormId(formId);
+        var wFormIdValue = await ResolveWFormIdParameterAsync(connection, normalizedFormId, cancellationToken);
+        var controls = await LoadFormControlsAsync(connection, wFormIdValue, cancellationToken);
+        var tableSuffix = FormIdNaming.GetEzfbTableSuffix(normalizedFormId);
+        var ezfbTable = $"dbo.[ezfb_{tableSuffix}_items]";
+        var ezfbColumns = await LoadTableColumnsAsync(connection, "dbo", $"ezfb_{tableSuffix}_items", cancellationToken);
+
+        if (ezfbColumns.Count == 0)
+        {
+            _logger.LogWarning("Table {EzfbTable} not found; po_row ezfb update skipped.", ezfbTable);
+            return 0;
+        }
+
+        var updated = 0;
+        foreach (var (poRowKey, value) in poRowFields)
+        {
+            if (IsEmptyValue(value))
+                continue;
+
+            if (!TryResolveControlForPoRowField(poRowKey, controls, out var control) || control is null)
+            {
+                _logger.LogDebug("No form control match for po_row key {PoRowKey}.", poRowKey);
+                continue;
+            }
+
+            if (!TryResolveEzfbColumn(control.JsonId, ezfbColumns, out var column))
+            {
+                _logger.LogWarning(
+                    "ezfb column not found for po_row key {PoRowKey}, jsonId {JsonId}, control {ControlName}.",
+                    poRowKey,
+                    control.JsonId,
+                    control.Name);
+                continue;
+            }
+
+            var valueToWrite = value;
+            if (IsJsonArrayValue(value) && IsPoRowLineItemKey(poRowKey) && IsDynamicTableControl(control))
+                valueToWrite = NormalizeLineItemsJson(value);
+            else if (IsJsonArrayValue(value))
+                continue;
+
+            try
+            {
+                await UpdateEzfbColumnAsync(connection, ezfbTable, formEntryId, column, valueToWrite, cancellationToken);
+                updated++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "po_row ezfb update failed for formEntryId {FormEntryId}, po_row key {PoRowKey}, column {Column}",
+                    formEntryId,
+                    poRowKey,
+                    column);
+            }
+        }
+
+        return updated;
+    }
+
+    private static bool IsPoRowLineItemKey(string poRowKey) =>
+        string.Equals(poRowKey, "PO Line Item Mapped", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(poRowKey, "PODetail", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryResolveControlForPoRowField(
+        string poRowKey,
+        IReadOnlyList<FormControlRow> controls,
+        out FormControlRow? control)
+    {
+        control = null;
+        if (string.IsNullOrWhiteSpace(poRowKey))
+            return false;
+
+        var candidates = new List<string> { poRowKey.Trim() };
+        if (PoRowFormFieldMatchCandidates.TryGetValue(poRowKey, out var extras))
+            candidates.AddRange(extras);
+        if (RepositoryFieldAliases.TryGetValue(poRowKey, out var repoAlias))
+            candidates.Add(repoAlias);
+
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (TryResolveControlForField(candidate, controls, out control))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsJsonArrayValue(string value)
