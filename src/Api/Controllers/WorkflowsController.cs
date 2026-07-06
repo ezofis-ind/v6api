@@ -38,6 +38,7 @@ using SaaSApp.Workflow.Application.Workflows.Queries.GetInstanceAttachments;
 using SaaSApp.Workflow.Domain.Enums;
 using SaaSApp.Api.Helpers;
 using SaaSApp.Repository.Application;
+using SaaSApp.Repository.Application.Contracts;
 using SaaSApp.Workflow.Application;
 
 namespace SaaSApp.Api.Controllers;
@@ -61,6 +62,9 @@ public sealed class WorkflowsController : ControllerBase
     private readonly IApAgentJobProgressService _apAgentJobProgress;
     private readonly IApAgentPythonJobClient _apAgentPythonJobClient;
     private readonly IWorkflowAttachmentArchiveService _attachmentArchive;
+    private readonly IRepositoryItemShareService _itemShares;
+    private readonly IShareGuestUserProvisioningService _guestProvisioning;
+    private readonly IWorkflowInboxShareAssignmentService _inboxShareAssignment;
 
     public WorkflowsController(
         IMediator mediator,
@@ -75,7 +79,10 @@ public sealed class WorkflowsController : ControllerBase
         IApAgentJobStatusService apAgentJobStatus,
         IApAgentJobProgressService apAgentJobProgress,
         IApAgentPythonJobClient apAgentPythonJobClient,
-        IWorkflowAttachmentArchiveService attachmentArchive)
+        IWorkflowAttachmentArchiveService attachmentArchive,
+        IRepositoryItemShareService itemShares,
+        IShareGuestUserProvisioningService guestProvisioning,
+        IWorkflowInboxShareAssignmentService inboxShareAssignment)
     {
         _mediator = mediator;
         _workflowSchemaService = workflowSchemaService;
@@ -90,6 +97,9 @@ public sealed class WorkflowsController : ControllerBase
         _apAgentJobProgress = apAgentJobProgress;
         _apAgentPythonJobClient = apAgentPythonJobClient;
         _attachmentArchive = attachmentArchive;
+        _itemShares = itemShares;
+        _guestProvisioning = guestProvisioning;
+        _inboxShareAssignment = inboxShareAssignment;
     }
 
     /// <summary>Apply workflow schema to current tenant database. Call this if workflow.Workflows is missing. Requires X-Tenant-Id. In Development, no auth required.</summary>
@@ -614,6 +624,59 @@ public sealed class WorkflowsController : ControllerBase
 
         var grouped = GroupInboxItems(items, request.GroupBy);
         return Ok(new WorkflowInboxResponse(grouped, new WorkflowAllMeta(page, pageSize, totalItems)));
+    }
+
+    /// <summary>
+    /// Share a workflow inbox file with an external user by email.
+    /// Creates a guest TenantUser (password set on first login), assigns the open inbox task to them,
+    /// and returns a share link for read-only file access plus inbox verify/approve.
+    /// </summary>
+    [HttpPost("instances/{instanceId:guid}/share-file")]
+    [ProducesResponseType(typeof(WorkflowInboxShareResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ShareInboxFile(
+        Guid instanceId,
+        [FromBody] CreateWorkflowInboxShareRequest request,
+        CancellationToken cancellationToken)
+    {
+        var tenantId = _tenantProvider.GetTenantId()
+            ?? throw new InvalidOperationException("Tenant context is required.");
+
+        var userId = GetCurrentUserId();
+        if (userId == null || userId == Guid.Empty)
+            return Unauthorized(new { error = "User id is required." });
+
+        try
+        {
+            var guestUserId = await _guestProvisioning.EnsureGuestUserAsync(
+                tenantId, request.Email, cancellationToken);
+
+            var share = await _itemShares.CreateWorkflowInboxShareAsync(
+                tenantId,
+                instanceId,
+                request.RepositoryId,
+                request.ItemId,
+                userId.Value,
+                request,
+                cancellationToken);
+
+            var inboxAssignment = await _inboxShareAssignment.AssignOpenInboxToUserAsync(
+                instanceId,
+                guestUserId,
+                userId.Value,
+                cancellationToken);
+
+            return Created(string.Empty, new WorkflowInboxShareResponse(share, inboxAssignment, guestUserId));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
     }
 
     /// <summary>Get a workflow by ID with steps and designer flow JSON (<c>workflowJson</c>) from blob/file storage.</summary>
@@ -2113,6 +2176,11 @@ public sealed record WorkflowInboxRequest(
     int CurrentPage = 1,
     int ItemsPerPage = 20,
     string Mode = "browse");
+
+public sealed record WorkflowInboxShareResponse(
+    CreateRepositoryItemShareResult Share,
+    WorkflowInboxShareAssignmentResult InboxAssignment,
+    Guid GuestUserId);
 
 public sealed record WorkflowInboxResponse(List<WorkflowInboxGroup> Data, WorkflowAllMeta Meta);
 public sealed record WorkflowInboxGroup(string Key, List<WorkflowInboxItem> Value);

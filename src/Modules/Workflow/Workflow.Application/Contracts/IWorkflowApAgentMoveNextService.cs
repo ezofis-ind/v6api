@@ -47,4 +47,15 @@ public interface IWorkflowApAgentMoveNextService
         IReadOnlyDictionary<string, string> fields,
         string? lineItemsJson = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// After AP Agent move-next: read latest agentDataValidation row for the instance and
+    /// apply matching scalar <c>po_row</c> fields to ezfb form data (formId + formEntryId).
+    /// </summary>
+    Task<int> ApplyPoRowFromStoredAgentValidationAsync(
+        Guid workflowId,
+        Guid workflowInstanceId,
+        string formId,
+        int formEntryId,
+        CancellationToken cancellationToken = default);
 }

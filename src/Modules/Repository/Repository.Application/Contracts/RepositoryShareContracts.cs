@@ -2,6 +2,15 @@ namespace SaaSApp.Repository.Application.Contracts;
 
 public sealed record CreateRepositoryItemShareRequest(
     string Email,
+    string? Message = null,
+    /// <summary>When true, creates a guest user in the tenant (no password) — used for workflow inbox shares.</summary>
+    bool ProvisionGuestUser = false,
+    Guid? WorkflowInstanceId = null);
+
+public sealed record CreateWorkflowInboxShareRequest(
+    string Email,
+    Guid RepositoryId,
+    Guid ItemId,
     string? Message = null);
 
 public sealed record CreateRepositoryItemShareResult(
@@ -15,13 +24,17 @@ public sealed record CreateRepositoryItemShareResult(
 
 public sealed record RepositoryItemSharePreviewDto(
     string ShareToken,
+    Guid SourceTenantId,
     Guid SourceRepositoryId,
     Guid SourceItemId,
     string? FileName,
     string? SourceOrganizationName,
     string RecipientEmail,
     DateTime ExpiresAtUtc,
-    bool RequiresLogin);
+    bool RequiresLogin,
+    bool RequiresPasswordSetup,
+    bool AutoProvisionGuest,
+    Guid? WorkflowInstanceId);
 
 /// <summary>A file that was shared with the logged-in user (for the "Shared with me" list).</summary>
 public sealed record SharedWithMeItemDto(
@@ -42,6 +55,21 @@ public interface IRepositoryItemShareService
         Guid itemId,
         Guid sharedByUserId,
         CreateRepositoryItemShareRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Workflow inbox share: provisions guest user in tenant and creates read-only file share.</summary>
+    Task<CreateRepositoryItemShareResult> CreateWorkflowInboxShareAsync(
+        Guid sourceTenantId,
+        Guid workflowInstanceId,
+        Guid repositoryId,
+        Guid itemId,
+        Guid sharedByUserId,
+        CreateWorkflowInboxShareRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Whether the share recipient still needs to set their first password.</summary>
+    Task<bool> RecipientRequiresPasswordSetupAsync(
+        string shareToken,
         CancellationToken cancellationToken = default);
 
     Task<RepositoryItemSharePreviewDto?> GetPreviewAsync(
