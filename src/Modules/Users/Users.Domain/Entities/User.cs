@@ -33,6 +33,10 @@ public sealed class User : Entity<Guid>, ITenantEntity
     public string? JobTitle { get; private set; }
     public Guid? ManagerId { get; private set; }
     public string? UserType { get; private set; }
+    public string? EmployeeId { get; private set; }
+    public string? BusinessUnit { get; private set; }
+    public string? Location { get; private set; }
+    public string? GroupName { get; private set; }
 
     // Auth
     public string? AuthStrategy { get; private set; }
@@ -44,6 +48,10 @@ public sealed class User : Entity<Guid>, ITenantEntity
     public bool TwoFactorAuthentication { get; private set; }
     public string? TotpSecretEncrypted { get; private set; }
     public int? PasswordAge { get; private set; }
+    public int PasswordExpiryDays { get; private set; } = 90;
+    public DateTime? AccountExpiryDate { get; private set; }
+    public bool ForcePasswordResetOnLogin { get; private set; }
+    public string? MfaMethods { get; private set; }
     public string? GoogleSubjectId { get; private set; }
     public string? MicrosoftOid { get; private set; }
 
@@ -63,26 +71,103 @@ public sealed class User : Entity<Guid>, ITenantEntity
 
     private User() { } // EF
 
-    private User(Guid id, Guid tenantId, string email, string displayName, string role,
-        string? firstName, string? lastName, string? authStrategy)
+    private User(
+        Guid id,
+        Guid tenantId,
+        string email,
+        string displayName,
+        string role,
+        string? firstName,
+        string? lastName,
+        string? authStrategy,
+        string? loginName,
+        string? loginType,
+        int passwordExpiryDays,
+        DateTime? accountExpiryDate,
+        bool forcePasswordResetOnLogin,
+        string? jobTitle,
+        string? employeeId,
+        string? department,
+        string? businessUnit,
+        Guid? managerId,
+        string? location,
+        string? groupName,
+        bool twoFactorAuthentication,
+        string? mfaMethods)
     {
         Id = id;
         TenantId = tenantId;
-        Email = email;
-        DisplayName = displayName;
-        Role = role ?? RoleTenantUser;
+        Email = email.Trim();
+        DisplayName = displayName.Trim();
+        Role = role;
         FirstName = firstName?.Trim();
         LastName = lastName?.Trim();
         AuthStrategy = authStrategy;
+        LoginName = string.IsNullOrWhiteSpace(loginName) ? null : loginName.Trim();
+        LoginType = string.IsNullOrWhiteSpace(loginType) ? null : loginType.Trim();
+        PasswordExpiryDays = passwordExpiryDays;
+        AccountExpiryDate = accountExpiryDate;
+        ForcePasswordResetOnLogin = forcePasswordResetOnLogin;
+        JobTitle = string.IsNullOrWhiteSpace(jobTitle) ? null : jobTitle.Trim();
+        EmployeeId = string.IsNullOrWhiteSpace(employeeId) ? null : employeeId.Trim();
+        Department = string.IsNullOrWhiteSpace(department) ? null : department.Trim();
+        BusinessUnit = string.IsNullOrWhiteSpace(businessUnit) ? null : businessUnit.Trim();
+        ManagerId = managerId;
+        Location = string.IsNullOrWhiteSpace(location) ? null : location.Trim();
+        GroupName = string.IsNullOrWhiteSpace(groupName) ? null : groupName.Trim();
+        TwoFactorAuthentication = twoFactorAuthentication;
+        MfaMethods = string.IsNullOrWhiteSpace(mfaMethods) ? null : mfaMethods.Trim();
         CreatedAtUtc = DateTime.UtcNow;
         RaiseDomainEvent(new UserCreatedEvent(Guid.NewGuid(), DateTime.UtcNow, id, tenantId, email, displayName));
     }
 
     /// <summary>Create a new user in the tenant.</summary>
-    public static User Create(Guid tenantId, string email, string displayName, string? role = null,
-        string? firstName = null, string? lastName = null, string? authStrategy = null)
+    public static User Create(
+        Guid tenantId,
+        string email,
+        string displayName,
+        string role,
+        string? firstName = null,
+        string? lastName = null,
+        string? authStrategy = null,
+        string? loginName = null,
+        string? loginType = null,
+        int passwordExpiryDays = 90,
+        DateTime? accountExpiryDate = null,
+        bool forcePasswordResetOnLogin = false,
+        string? jobTitle = null,
+        string? employeeId = null,
+        string? department = null,
+        string? businessUnit = null,
+        Guid? managerId = null,
+        string? location = null,
+        string? groupName = null,
+        bool twoFactorAuthentication = false,
+        string? mfaMethods = null)
     {
-        return new User(Guid.NewGuid(), tenantId, email, displayName, role ?? RoleTenantUser, firstName, lastName, authStrategy ?? AuthStrategyEzofis);
+        return new User(
+            Guid.NewGuid(),
+            tenantId,
+            email,
+            displayName,
+            role,
+            firstName,
+            lastName,
+            authStrategy ?? AuthStrategyEzofis,
+            loginName,
+            loginType,
+            passwordExpiryDays,
+            accountExpiryDate,
+            forcePasswordResetOnLogin,
+            jobTitle,
+            employeeId,
+            department,
+            businessUnit,
+            managerId,
+            location,
+            groupName,
+            twoFactorAuthentication,
+            mfaMethods);
     }
 
     /// <summary>Update profile fields. Only non-null parameters are applied.</summary>

@@ -290,6 +290,7 @@ app.UseMiddleware<EmailTenantResolutionMiddleware>();
 // Resolve tenant DB connection from catalog (must run after auth so JWT/tid is available)
 app.UseMiddleware<TenantConnectionMiddleware>();
 app.UseMiddleware<RepositoryShareMiddleware>();
+app.UseMiddleware<UsersPermissionSchemaEnsuringMiddleware>();
 // Ensure workflow schema exists in tenant DB before workflow operations
 app.UseMiddleware<WorkflowSchemaEnsuringMiddleware>();
 app.UseMiddleware<DmsSchemaEnsuringMiddleware>();

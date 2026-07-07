@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SaaSApp.MultiTenancy;
 using SaaSApp.Users.Application.Contracts;
 using SaaSApp.Users.Domain.Entities;
 
@@ -7,10 +8,12 @@ namespace SaaSApp.Users.Infrastructure.Persistence;
 public sealed class GroupRepository : IGroupRepository
 {
     private readonly UsersDbContext _context;
+    private readonly ITenantProvider _tenantProvider;
 
-    public GroupRepository(UsersDbContext context)
+    public GroupRepository(UsersDbContext context, ITenantProvider tenantProvider)
     {
         _context = context;
+        _tenantProvider = tenantProvider;
     }
 
     public async Task AddAsync(Group group, CancellationToken cancellationToken = default)
@@ -67,6 +70,28 @@ public sealed class GroupRepository : IGroupRepository
             query = query.Where(g => g.Id != excludeGroupId.Value);
 
         return await query.AnyAsync(cancellationToken);
+    }
+
+    public async Task<Group?> GetByNameAsync(string name, CancellationToken cancellationToken = default)
+    {
+        var trimmed = name.Trim();
+        return await _context.Groups
+            .FirstOrDefaultAsync(g => g.Name.Trim() == trimmed, cancellationToken);
+    }
+
+    public async Task AddMemberAsync(Guid groupId, Guid userId, CancellationToken cancellationToken = default)
+    {
+        var tenantId = _tenantProvider.GetTenantId()
+            ?? throw new InvalidOperationException("TenantId is required to add a group member.");
+
+        var alreadyMember = await _context.UserGroups
+            .AnyAsync(ug => ug.GroupId == groupId && ug.UserId == userId, cancellationToken);
+        if (alreadyMember)
+            return;
+
+        await _context.UserGroups.AddAsync(
+            UserGroup.Create(tenantId, groupId, userId),
+            cancellationToken);
     }
 
     public async Task<IReadOnlyList<GroupListItem>> ListAsync(CancellationToken cancellationToken = default)

@@ -210,6 +210,9 @@ namespace SaaSApp.Users.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<DateTime?>("AccountExpiryDate")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("AvatarPath")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
@@ -228,6 +231,10 @@ namespace SaaSApp.Users.Infrastructure.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
+                    b.Property<string>("BusinessUnit")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<string>("DeviceId")
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
@@ -241,6 +248,10 @@ namespace SaaSApp.Users.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("EmployeeId")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<string>("FirstName")
                         .HasMaxLength(128)
@@ -256,6 +267,15 @@ namespace SaaSApp.Users.Infrastructure.Migrations
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("bit");
+
+                    b.Property<bool>("ForcePasswordResetOnLogin")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("GroupName")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<string>("JobTitle")
                         .HasMaxLength(128)
@@ -277,12 +297,20 @@ namespace SaaSApp.Users.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("Location")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<Guid?>("ManagerId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("MicrosoftOid")
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("MfaMethods")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
 
                     b.Property<DateTime?>("ModifiedAtUtc")
                         .HasColumnType("datetime2");
@@ -292,6 +320,11 @@ namespace SaaSApp.Users.Infrastructure.Migrations
 
                     b.Property<int?>("PasswordAge")
                         .HasColumnType("int");
+
+                    b.Property<int>("PasswordExpiryDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(90);
 
                     b.Property<string>("PasswordHash")
                         .HasMaxLength(512)

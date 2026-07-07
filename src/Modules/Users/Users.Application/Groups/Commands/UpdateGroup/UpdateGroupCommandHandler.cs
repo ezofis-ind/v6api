@@ -16,28 +16,41 @@ public sealed class UpdateGroupCommandHandler : IRequestHandler<UpdateGroupComma
 
     public async Task<UpdateGroupCommandResult> Handle(UpdateGroupCommand request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.Name))
-            return Fail("Group name is required.");
+        var hasName = !string.IsNullOrWhiteSpace(request.Name);
+        var hasDescription = request.Description != null;
+        var hasUsers = request.UserIds != null;
 
-        var groupName = request.Name.Trim();
-        var userIds = (request.UserIds ?? []).Distinct().ToList();
-
-        if (userIds.Count > 0)
-        {
-            var existingUserCount = await _userRepository.CountExistingByIdsAsync(userIds, cancellationToken);
-            if (existingUserCount != userIds.Count)
-                return Fail("One or more users were not found in this tenant.", 404);
-        }
+        if (!hasName && !hasDescription && !hasUsers)
+            return Fail("No fields to update.");
 
         var group = await _groupRepository.GetByIdAsync(request.GroupId, cancellationToken);
         if (group == null)
             return Fail("Group not found.", 404);
 
-        if (await _groupRepository.ExistsByNameAsync(groupName, request.GroupId, cancellationToken))
-            return Fail($"A group named '{groupName}' already exists.");
+        if (hasName)
+        {
+            var groupName = request.Name!.Trim();
+            if (await _groupRepository.ExistsByNameAsync(groupName, request.GroupId, cancellationToken))
+                return Fail($"A group named '{groupName}' already exists.");
 
-        group.Update(groupName, request.Description);
-        group.ReplaceUsers(userIds);
+            group.Update(name: groupName);
+        }
+
+        if (hasDescription)
+            group.Update(description: request.Description);
+
+        if (hasUsers)
+        {
+            var userIds = request.UserIds!.Distinct().ToList();
+            if (userIds.Count > 0)
+            {
+                var existingUserCount = await _userRepository.CountExistingByIdsAsync(userIds, cancellationToken);
+                if (existingUserCount != userIds.Count)
+                    return Fail("One or more users were not found in this tenant.", 404);
+            }
+
+            group.ReplaceUsers(userIds);
+        }
 
         return new UpdateGroupCommandResult(Success: true, StatusCode: 204);
     }

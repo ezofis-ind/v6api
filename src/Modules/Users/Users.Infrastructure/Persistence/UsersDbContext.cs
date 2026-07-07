@@ -59,6 +59,14 @@ public sealed class UsersDbContext : DbContext
             entity.Property(e => e.DeviceId).HasMaxLength(256);
             entity.Property(e => e.TotpSecretEncrypted).HasMaxLength(512);
             entity.Property(e => e.PasswordAge);
+            entity.Property(e => e.PasswordExpiryDays).HasDefaultValue(90);
+            entity.Property(e => e.AccountExpiryDate);
+            entity.Property(e => e.ForcePasswordResetOnLogin).HasDefaultValue(false);
+            entity.Property(e => e.EmployeeId).HasMaxLength(128);
+            entity.Property(e => e.BusinessUnit).HasMaxLength(128);
+            entity.Property(e => e.Location).HasMaxLength(128);
+            entity.Property(e => e.GroupName).HasMaxLength(128);
+            entity.Property(e => e.MfaMethods).HasMaxLength(64);
             entity.Property(e => e.GoogleSubjectId).HasMaxLength(256);
             entity.Property(e => e.MicrosoftOid).HasMaxLength(256);
             entity.Property(e => e.AvatarPath).HasMaxLength(512);

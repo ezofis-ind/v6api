@@ -37,10 +37,12 @@ public sealed class Group : Entity<Guid>, ITenantEntity
             string.IsNullOrWhiteSpace(description) ? null : description.Trim());
     }
 
-    public void Update(string name, string? description)
+    public void Update(string? name = null, string? description = null)
     {
-        Name = name.Trim();
-        Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        if (name != null)
+            Name = name.Trim();
+        if (description != null)
+            Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
     }
 
     public void AssignUsers(IEnumerable<Guid> userIds)

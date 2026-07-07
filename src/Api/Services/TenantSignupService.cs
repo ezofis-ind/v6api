@@ -204,6 +204,10 @@ public sealed class TenantSignupService : ITenantSignupService
         var tenantProvider = new StaticTenantProvider(tenantId);
         await using var context = new UsersDbContext(optionsBuilder.Options, tenantProvider);
         await context.Database.MigrateAsync(cancellationToken);
+        await UsersSchemaEnsurer.EnsureExtendedUserColumnsAsync(context, cancellationToken);
+        await UsersSchemaEnsurer.EnsureGroupsTablesAsync(context, cancellationToken);
+        await UsersSchemaEnsurer.EnsurePermissionCategoriesAsync(context, cancellationToken);
+        await UsersSchemaEnsurer.EnsureRoleMenusTablesAsync(context, cancellationToken);
     }
 
     private async Task CreatePilotUserIfConfiguredAsync(
@@ -273,6 +277,7 @@ public sealed class TenantSignupService : ITenantSignupService
         });
         var tenantProvider = new StaticTenantProvider(tenantId);
         await using var context = new UsersDbContext(optionsBuilder.Options, tenantProvider);
+        await UsersSchemaEnsurer.EnsureExtendedUserColumnsAsync(context, cancellationToken);
 
         var normalizedEmail = email.Trim();
         var exists = await context.Users.AnyAsync(

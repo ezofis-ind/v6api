@@ -24,5 +24,9 @@ public interface IGroupRepository
 
     Task<bool> ExistsByNameAsync(string name, Guid? excludeGroupId = null, CancellationToken cancellationToken = default);
 
+    Task<Group?> GetByNameAsync(string name, CancellationToken cancellationToken = default);
+
+    Task AddMemberAsync(Guid groupId, Guid userId, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<GroupListItem>> ListAsync(CancellationToken cancellationToken = default);
 }

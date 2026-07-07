@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json.Serialization;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -57,10 +58,34 @@ public sealed class UsersController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateUserRequest request, CancellationToken cancellationToken)
     {
         var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
-        var command = new CreateUserCommand(request.Email, request.DisplayName, request.Password, request.Role, request.FirstName, request.LastName, request.AuthStrategy);
+        var command = new CreateUserCommand(
+            request.Email,
+            request.DisplayName,
+            request.Password,
+            request.Role,
+            request.FirstName,
+            request.LastName,
+            request.AuthStrategy,
+            request.UserName,
+            request.LoginType,
+            request.PasswordExpiryDays,
+            request.AccountExpiryDate,
+            request.ForcePasswordResetOnLogin,
+            request.JobTitle,
+            request.EmployeeId,
+            request.Department,
+            request.BusinessUnit,
+            request.Manager,
+            request.Location,
+            request.Group,
+            request.MfAuthentication,
+            request.MfaMethods);
         var result = await _mediator.Send(command, cancellationToken);
-        await _userTenantRegistry.AddOrUpdateAsync(request.Email, tenantId, request.Role ?? "TenantUser", cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id = result.UserId }, result);
+        if (!result.Success)
+            return StatusCode(result.StatusCode, new { error = result.Error });
+
+        await _userTenantRegistry.AddOrUpdateAsync(request.Email.Trim(), tenantId, result.RoleName ?? SaaSApp.Users.Domain.Entities.User.RoleTenantUser, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id = result.UserId }, new { userId = result.UserId });
     }
 
     /// <summary>Current user profile and custom-role permissions (path is /api/usersession). Includes permissionCount and permissionKeys grouped by category.</summary>
@@ -215,7 +240,7 @@ public sealed class UsersController : ControllerBase
             new CreateGroupResponse(result.GroupId!.Value, result.GroupName!, result.UserCount));
     }
 
-    /// <summary>Update a user group name, description, and replace member list. Admin only. Users may be empty to clear all members.</summary>
+    /// <summary>Update a user group. Admin only. Only provided fields are updated. Users replaces member list when included (may be empty to clear).</summary>
     [HttpPut("groups/{groupId:guid}")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -227,7 +252,7 @@ public sealed class UsersController : ControllerBase
             groupId,
             request.GroupName,
             request.Description,
-            request.Users ?? []);
+            request.Users);
         var result = await _mediator.Send(command, cancellationToken);
         if (!result.Success)
             return StatusCode(result.StatusCode, new { error = result.Error });
@@ -399,8 +424,48 @@ public sealed class UsersController : ControllerBase
     }
 }
 
-/// <summary>Request to create a user. Email and DisplayName required. Password enables Ezofis login.</summary>
-public record CreateUserRequest(string Email, string DisplayName, string? Password = null, string? Role = null, string? FirstName = null, string? LastName = null, string? AuthStrategy = null);
+/// <summary>Request to create a user with extended profile and auth settings.</summary>
+public sealed class CreateUserRequest
+{
+    public string Email { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string? Password { get; set; }
+    public string? Role { get; set; }
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public string? AuthStrategy { get; set; }
+    public string? UserName { get; set; }
+
+    [JsonPropertyName("LoginType")]
+    public string? LoginType { get; set; }
+
+    public int? PasswordExpiryDays { get; set; }
+    public DateTime? AccountExpiryDate { get; set; }
+    public string? ForcePasswordResetOnLogin { get; set; }
+
+    [JsonPropertyName("Job Title")]
+    public string? JobTitle { get; set; }
+
+    [JsonPropertyName("Employee Id")]
+    public string? EmployeeId { get; set; }
+
+    public string? Department { get; set; }
+
+    [JsonPropertyName("Bussiness Unit")]
+    public string? BusinessUnit { get; set; }
+
+    [JsonPropertyName("Manager")]
+    public string? Manager { get; set; }
+
+    public string? Location { get; set; }
+    public string[]? Group { get; set; }
+
+    [JsonPropertyName("MFAuthentication")]
+    public string? MfAuthentication { get; set; }
+
+    [JsonPropertyName("MFA Methods")]
+    public string? MfaMethods { get; set; }
+}
 
 /// <summary>Request to update a user. Only non-null fields are updated.</summary>
 public record UpdateUserRequest(string? DisplayName, string? Role, string? FirstName = null, string? LastName = null, string? PhoneNo = null, string? Department = null, string? JobTitle = null, string? Language = null, string? CountryCode = null, string? AvatarPath = null, string? UiPreference = null);
@@ -421,8 +486,8 @@ public record CreateRoleResponse(Guid RoleId, string RoleName, int UserCount, in
 /// <summary>Request to create a user group with assigned members.</summary>
 public record CreateGroupRequest(string GroupName, IReadOnlyList<Guid> Users, string? Description = null);
 
-/// <summary>Request to update a user group and replace its member list.</summary>
-public record UpdateGroupRequest(string GroupName, IReadOnlyList<Guid> Users, string? Description = null);
+/// <summary>Request to update a user group. Only provided fields are updated.</summary>
+public record UpdateGroupRequest(string? GroupName = null, IReadOnlyList<Guid>? Users = null, string? Description = null);
 
 /// <summary>Response after creating a user group.</summary>
 public record CreateGroupResponse(Guid GroupId, string GroupName, int UserCount);
