@@ -5,6 +5,7 @@ using BCrypt.Net;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
+using SaaSApp.Repository.Application.Contracts;
 using SaaSApp.Users.Application.Contracts;
 using SaaSApp.Users.Infrastructure.Persistence;
 
@@ -18,17 +19,23 @@ public sealed class EzofisAuthService : IEzofisAuthService
     private static readonly TimeSpan AccessTokenExpiry = TimeSpan.FromDays(1);
 
     private readonly IUserRepository _userRepository;
+    private readonly IShareGuestUserProvisioningService _guestProvisioning;
+    private readonly IRepositoryItemShareService _shareService;
     private readonly ITwoFactorService _twoFactorService;
     private readonly IMemoryCache _cache;
     private readonly IConfiguration _configuration;
 
     public EzofisAuthService(
         IUserRepository userRepository,
+        IShareGuestUserProvisioningService guestProvisioning,
+        IRepositoryItemShareService shareService,
         ITwoFactorService twoFactorService,
         IMemoryCache cache,
         IConfiguration configuration)
     {
         _userRepository = userRepository;
+        _guestProvisioning = guestProvisioning;
+        _shareService = shareService;
         _twoFactorService = twoFactorService;
         _cache = cache;
         _configuration = configuration;
@@ -36,8 +43,8 @@ public sealed class EzofisAuthService : IEzofisAuthService
 
     public async Task<LoginResult> LoginAsync(string email, string password, Guid tenantId, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
-            throw new ArgumentException("Email and password are required.");
+        if (string.IsNullOrWhiteSpace(email))
+            throw new ArgumentException("Email is required.");
 
         var user = await _userRepository.GetByEmailAsync(email.Trim(), cancellationToken);
         if (user == null)
@@ -47,7 +54,16 @@ public sealed class EzofisAuthService : IEzofisAuthService
             throw new UnauthorizedAccessException("Invalid email or password.");
 
         if (string.IsNullOrEmpty(user.PasswordHash))
-            throw new UnauthorizedAccessException("Password not set. Use set-password or contact admin.");
+        {
+            return new LoginRequiresPasswordSetup(
+                tenantId,
+                user.Id,
+                user.Email,
+                ShareToken: null);
+        }
+
+        if (string.IsNullOrWhiteSpace(password))
+            throw new ArgumentException("Password is required.");
 
         try
         {
@@ -67,6 +83,42 @@ public sealed class EzofisAuthService : IEzofisAuthService
         }
 
         return BuildLoginSuccess(user, tenantId);
+    }
+
+    public async Task<LoginResult> SetShareInvitePasswordAsync(
+        string shareToken,
+        string email,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(shareToken))
+            throw new ArgumentException("ShareToken is required.");
+        if (string.IsNullOrWhiteSpace(email))
+            throw new ArgumentException("Email is required.");
+        if (string.IsNullOrWhiteSpace(password))
+            throw new ArgumentException("Password is required.");
+
+        var preview = await _shareService.GetPreviewAsync(shareToken.Trim(), cancellationToken)
+            ?? throw new UnauthorizedAccessException("Invalid or expired share link.");
+
+        if (!preview.AutoProvisionGuest)
+            throw new UnauthorizedAccessException("This share link does not support guest password setup.");
+
+        if (!string.Equals(preview.RecipientEmail, email.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Email does not match this share invite.");
+
+        var tenantId = preview.SourceTenantId;
+        var userId = await _guestProvisioning.EnsureGuestUserAsync(tenantId, email.Trim(), cancellationToken);
+
+        var updated = await _guestProvisioning.SetFirstPasswordAsync(tenantId, email.Trim(), password, cancellationToken);
+        if (!updated)
+            throw new UnauthorizedAccessException("Unable to set password for this invite.");
+
+        return new LoginSuccess(
+            userId,
+            GenerateJwt(userId, email.Trim().ToLowerInvariant(), email.Trim(), SaaSApp.Users.Domain.Entities.User.RoleTenantUser, tenantId),
+            "Bearer",
+            (int)AccessTokenExpiry.TotalSeconds);
     }
 
     public async Task<LoginResult> CompleteTwoFactorAsync(string tempToken, string code, CancellationToken cancellationToken = default)

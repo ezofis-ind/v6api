@@ -36,6 +36,7 @@ public sealed class LoginController : ControllerBase
     [HttpPost("ezofis/login")]
     [ProducesResponseType(typeof(LoginSuccess), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(LoginRequiresTwoFactor), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(LoginRequiresPasswordSetup), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken cancellationToken)
@@ -125,6 +126,42 @@ public sealed class LoginController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Set first-time password for a workflow inbox / guest file share invite.
+    /// No X-Tenant-Id required — tenant is resolved from the share token.
+    /// Returns JWT on success; use shareToken on repository file APIs after login.
+    /// </summary>
+    [HttpPost("share/set-password")]
+    [ProducesResponseType(typeof(LoginSuccess), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> SetShareInvitePassword(
+        [FromBody] SetShareInvitePasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _authService.SetShareInvitePasswordAsync(
+                request.ShareToken,
+                request.Email,
+                request.Password,
+                cancellationToken);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     private object BuildLoginConfigError(InvalidOperationException ex)
     {
         var showDetails = _environment.IsDevelopment()
@@ -143,3 +180,6 @@ public record CompleteTwoFactorRequest(string TempToken, string Code);
 
 /// <summary>Social login: email + provider (google or microsoft). Requires X-Tenant-Id header. No password.</summary>
 public record SocialLoginRequest(string Email, string Provider);
+
+/// <summary>First-time password for guest share invite from workflow inbox.</summary>
+public record SetShareInvitePasswordRequest(string ShareToken, string Email, string Password);

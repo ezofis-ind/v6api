@@ -252,6 +252,18 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
         int? legacyNextTransactionId = isCompleted ? 0 : legacySync.NextTransactionId;
         Guid? legacyNextTransactionGuid = isCompleted ? null : legacySync.NextTransactionGuid;
 
+        if (ApAgentStepDetector.IsApAgentMoveNext(targetDefinitionStep, request.ActivityId)
+            && !string.IsNullOrWhiteSpace(request.FormId)
+            && request.FormEntryId is > 0)
+        {
+            await _apAgentMoveNext.ApplyPoRowFromStoredAgentValidationAsync(
+                instance.WorkflowId,
+                instance.Id,
+                request.FormId,
+                request.FormEntryId.Value,
+                cancellationToken);
+        }
+
         await PropagateMailboxFormDataAsync(request, instance, cancellationToken);
 
         return new MoveToNextStepCommandResult(

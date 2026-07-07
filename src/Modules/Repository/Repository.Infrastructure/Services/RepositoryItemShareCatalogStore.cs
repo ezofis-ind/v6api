@@ -59,6 +59,13 @@ internal static class RepositoryItemShareCatalogStore
                 CREATE INDEX IX_RepositoryItemShares_Source
                     ON catalog.RepositoryItemShares (SourceTenantId, SourceRepositoryId, SourceItemId);
             END
+
+            IF COL_LENGTH('catalog.RepositoryItemShares', 'AutoProvisionGuest') IS NULL
+                ALTER TABLE catalog.RepositoryItemShares ADD AutoProvisionGuest BIT NOT NULL
+                    CONSTRAINT DF_RepositoryItemShares_AutoProvisionGuest DEFAULT 0;
+
+            IF COL_LENGTH('catalog.RepositoryItemShares', 'WorkflowInstanceId') IS NULL
+                ALTER TABLE catalog.RepositoryItemShares ADD WorkflowInstanceId UNIQUEIDENTIFIER NULL;
             """;
 
         foreach (var sql in new[] { ensureSchemaSql, createTableSql })
