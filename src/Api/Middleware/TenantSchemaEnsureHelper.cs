@@ -51,6 +51,45 @@ internal static class TenantSchemaEnsureHelper
             applySchema,
             cancellationToken);
 
+    public static Task EnsurePermissionCategoriesAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "users-permission-categories",
+            connectionString,
+            "SELECT 1 FROM sys.tables WHERE name = N'PermissionCategories' AND schema_id = SCHEMA_ID(N'users')",
+            applySchema,
+            cancellationToken);
+
+    public static Task EnsureMenusTablesAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "users-menus",
+            connectionString,
+            "SELECT 1 FROM sys.tables WHERE name = N'Menus' AND schema_id = SCHEMA_ID(N'users')",
+            applySchema,
+            cancellationToken);
+
+    public static Task EnsureRoleMenusTablesAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "users-role-menus",
+            connectionString,
+            "SELECT 1 FROM sys.tables WHERE name = N'RoleMenus' AND schema_id = SCHEMA_ID(N'users')",
+            applySchema,
+            cancellationToken);
+
     private static async Task EnsureOnceAsync(
         Guid tenantId,
         string schemaKey,

@@ -4,9 +4,9 @@ namespace SaaSApp.Users.Application.Groups.Commands.UpdateGroup;
 
 public record UpdateGroupCommand(
     Guid GroupId,
-    string Name,
-    string? Description,
-    IReadOnlyList<Guid> UserIds) : IRequest<UpdateGroupCommandResult>;
+    string? Name = null,
+    string? Description = null,
+    IReadOnlyList<Guid>? UserIds = null) : IRequest<UpdateGroupCommandResult>;
 
 public record UpdateGroupCommandResult(
     bool Success,

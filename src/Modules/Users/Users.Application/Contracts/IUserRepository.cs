@@ -14,6 +14,9 @@ public interface IUserRepository
     /// <summary>Get user by email (case-sensitive, trimmed).</summary>
     Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default);
 
+    /// <summary>Find a user by email or display name (email match preferred).</summary>
+    Task<User?> FindByEmailOrDisplayNameAsync(string emailOrDisplayName, CancellationToken cancellationToken = default);
+
     /// <summary>List all users (excluding soft-deleted) ordered by DisplayName.</summary>
     Task<IReadOnlyList<User>> ListAsync(CancellationToken cancellationToken = default);
 

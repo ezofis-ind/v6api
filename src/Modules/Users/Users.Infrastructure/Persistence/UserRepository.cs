@@ -33,6 +33,21 @@ public sealed class UserRepository : IUserRepository
             .FirstOrDefaultAsync(u => u.Email == email.Trim(), cancellationToken);
     }
 
+    public async Task<User?> FindByEmailOrDisplayNameAsync(string emailOrDisplayName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(emailOrDisplayName))
+            return null;
+
+        var value = emailOrDisplayName.Trim();
+        var byEmail = await GetByEmailAsync(value, cancellationToken);
+        if (byEmail != null)
+            return byEmail;
+
+        return await _context.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.DisplayName == value, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<User>> ListAsync(CancellationToken cancellationToken = default)
     {
         return await _context.Users
