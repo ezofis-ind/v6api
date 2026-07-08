@@ -17,6 +17,7 @@ public sealed class CatalogDbContext : DbContext
     public DbSet<MailSetting> MailSettings => Set<MailSetting>();
     public DbSet<OtpVerification> OtpVerifications => Set<OtpVerification>();
     public DbSet<RepositoryItemShare> RepositoryItemShares => Set<RepositoryItemShare>();
+    public DbSet<CreditMaster> CreditMasters => Set<CreditMaster>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -45,7 +46,10 @@ public sealed class CatalogDbContext : DbContext
             entity.Property(e => e.Email).HasMaxLength(256).IsRequired();
             entity.Property(e => e.Role).HasMaxLength(64).IsRequired();
             entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.UserId);
+            entity.Property(e => e.PreQuestionsJson);
             entity.HasIndex(e => new { e.Email, e.TenantId }).IsUnique();
+            entity.HasIndex(e => new { e.UserId, e.TenantId });
         });
 
         modelBuilder.Entity<RepositoryItemShare>(entity =>
@@ -61,6 +65,39 @@ public sealed class CatalogDbContext : DbContext
             entity.HasIndex(e => new { e.SourceTenantId, e.SourceRepositoryId, e.SourceItemId });
             entity.Property(e => e.AutoProvisionGuest);
             entity.Property(e => e.WorkflowInstanceId);
+        });
+
+        modelBuilder.Entity<CreditMaster>(entity =>
+        {
+            entity.ToTable("creditMaster", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenantId");
+            entity.Property(e => e.AllocationMonth).HasColumnName("allocationMonth");
+            entity.Property(e => e.AllocationYear).HasColumnName("allocationYear");
+            entity.Property(e => e.CreditType).HasColumnName("creditType").HasMaxLength(100);
+            entity.Property(e => e.InitialCredit).HasColumnName("initialCredit");
+            entity.Property(e => e.BalanceCredit).HasColumnName("balanceCredit");
+            entity.Property(e => e.Remarks).HasColumnName("remarks").HasMaxLength(500);
+            entity.Property(e => e.CreatedAt).HasColumnName("createdAt");
+            entity.Property(e => e.ModifiedAt).HasColumnName("modifiedAt");
+            entity.Property(e => e.CreatedBy).HasColumnName("createdBy").HasMaxLength(50);
+            entity.Property(e => e.ModifiedBy).HasColumnName("modifiedBy").HasMaxLength(50);
+            entity.Property(e => e.IsDeleted).HasColumnName("isDeleted");
+            entity.Property(e => e.ValidFrom).HasColumnName("ValidFrom");
+            entity.Property(e => e.ValidTo).HasColumnName("ValidTo");
+            entity.Property(e => e.ParentAllocationId).HasColumnName("parentAllocationId");
+            entity.Property(e => e.SubscriptionType).HasColumnName("subscriptionType").HasMaxLength(100);
+            entity.Property(e => e.ValidFromDate).HasColumnName("validFromDate");
+            entity.Property(e => e.ValidToDate).HasColumnName("validToDate");
+            entity.Property(e => e.IsCarryForward).HasColumnName("isCarryForward");
+            entity.Property(e => e.Priority).HasColumnName("priority");
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(50);
+            entity.Property(e => e.CarryForwardCredit).HasColumnName("carryForwardCredit");
+            entity.Property(e => e.ExtraConsumedCredit).HasColumnName("extraConsumedCredit");
+            entity.Property(e => e.TopUpBalanceCredit).HasColumnName("topUpBalanceCredit");
+            entity.Property(e => e.OverallConsumedCredit).HasColumnName("overallConsumedCredit");
+            entity.HasIndex(e => new { e.TenantId, e.AllocationYear, e.AllocationMonth, e.CreditType });
         });
 
         modelBuilder.Entity<MailSetting>(entity =>

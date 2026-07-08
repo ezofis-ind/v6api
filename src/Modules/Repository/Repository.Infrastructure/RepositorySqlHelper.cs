@@ -61,7 +61,20 @@ internal static class RepositorySqlHelper
     public static string MapSortColumn(string sortBy) => sortBy.Trim().ToLowerInvariant() switch
     {
         "filename" or "name" => "FileName",
-        "status" => "Status",
+        "status" or "stagestatus" => "Status",
+        "documentdate" or "invoicedate" or "podate" => "DocumentDate",
+        "supplier" or "vendorname" or "vendor" => "Supplier",
+        "invoicenumber" or "invoiceno" => "InvoiceNumber",
+        "ponumber" => "PoNumber",
+        "amount" or "invoiceamount" or "poamount" => "Amount",
+        "documenttype" => "DocumentType",
+        "currency" => "Currency",
+        "ocrpercent" or "ocrscore" => "OcrScore",
+        "aistatus" or "matchedstatus" => "AiStatus",
+        "risklevel" => "RiskLevel",
+        "source" => "Source",
+        "department" => "Department",
+        "fileversion" => "FileVersion",
         "createdatutc" => "CreatedAtUtc",
         "modifiedatutc" => "ModifiedAtUtc",
         _ => "CreatedAtUtc"

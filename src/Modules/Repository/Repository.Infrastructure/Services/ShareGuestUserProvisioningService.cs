@@ -9,6 +9,9 @@ namespace SaaSApp.Repository.Infrastructure.Services;
 
 public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvisioningService
 {
+    private static readonly string[] FirstTimeAuthMethods = ["password_setup", "google", "microsoft"];
+    private static readonly string[] PasswordLoginOnly = ["password_login"];
+
     private readonly ITenantConnectionStringResolver _connectionResolver;
     private readonly IUserTenantRegistry _userTenantRegistry;
 
@@ -33,7 +36,7 @@ public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvision
 
         if (existing != null)
         {
-            await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, existing.Role, cancellationToken);
+            await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, existing.Role, existing.Id, cancellationToken);
             return existing.Id;
         }
 
@@ -48,11 +51,20 @@ public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvision
 
         context.Users.Add(user);
         await context.SaveChangesAsync(cancellationToken);
-        await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, User.RoleTenantUser, cancellationToken);
+        await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, User.RoleTenantUser, user.Id, cancellationToken);
         return user.Id;
     }
 
     public async Task<bool> RequiresPasswordSetupAsync(
+        Guid tenantId,
+        string email,
+        CancellationToken cancellationToken = default)
+    {
+        var info = await GetShareInviteAuthInfoAsync(tenantId, email, cancellationToken);
+        return info.RequiresPasswordSetup;
+    }
+
+    public async Task<ShareInviteAuthInfo> GetShareInviteAuthInfoAsync(
         Guid tenantId,
         string email,
         CancellationToken cancellationToken = default)
@@ -63,7 +75,82 @@ public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvision
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Email == normalizedEmail && !u.IsDeleted, cancellationToken);
 
-        return user != null && string.IsNullOrEmpty(user.PasswordHash);
+        if (user == null)
+        {
+            return new ShareInviteAuthInfo(
+                UserExists: false,
+                RequiresPasswordSetup: true,
+                RequiredSocialProvider: null,
+                AllowedAuthMethods: FirstTimeAuthMethods,
+                LoginType: "EZOFIS");
+        }
+
+        var socialProvider = ResolveSocialProvider(user);
+        if (socialProvider != null)
+        {
+            return new ShareInviteAuthInfo(
+                UserExists: true,
+                RequiresPasswordSetup: false,
+                RequiredSocialProvider: socialProvider,
+                AllowedAuthMethods: [socialProvider],
+                LoginType: user.LoginType);
+        }
+
+        if (!string.IsNullOrEmpty(user.PasswordHash))
+        {
+            return new ShareInviteAuthInfo(
+                UserExists: true,
+                RequiresPasswordSetup: false,
+                RequiredSocialProvider: null,
+                AllowedAuthMethods: PasswordLoginOnly,
+                LoginType: string.IsNullOrWhiteSpace(user.LoginType) ? "EZOFIS" : user.LoginType);
+        }
+
+        // Share guest created at invite time — auth method not chosen yet; recipient picks on first sign-in.
+        return new ShareInviteAuthInfo(
+            UserExists: true,
+            RequiresPasswordSetup: true,
+            RequiredSocialProvider: null,
+            AllowedAuthMethods: FirstTimeAuthMethods,
+            LoginType: string.IsNullOrWhiteSpace(user.LoginType) ? "EZOFIS" : user.LoginType);
+    }
+
+    public async Task<Guid> ConfirmGuestSocialLoginAsync(
+        Guid tenantId,
+        string email,
+        string provider,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedProvider = NormalizeSocialProvider(provider)
+            ?? throw new ArgumentException("Provider must be google or microsoft.");
+
+        var normalizedEmail = NormalizeEmail(email);
+        await using var context = await CreateUsersContextAsync(tenantId, cancellationToken);
+        var user = await context.Users
+            .FirstOrDefaultAsync(u => u.Email == normalizedEmail && !u.IsDeleted, cancellationToken);
+
+        if (user == null)
+            throw new InvalidOperationException("User not found for this share invite.");
+
+        var existingProvider = ResolveSocialProvider(user);
+        if (existingProvider != null)
+        {
+            if (!existingProvider.Equals(normalizedProvider, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"This account is linked to {existingProvider} sign-in.");
+            }
+
+            return user.Id;
+        }
+
+        if (!string.IsNullOrEmpty(user.PasswordHash))
+            throw new InvalidOperationException("This account uses password login. Use Ezofis login instead.");
+
+        ApplySocialLogin(user, normalizedProvider);
+        await context.SaveChangesAsync(cancellationToken);
+        await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, user.Role, user.Id, cancellationToken);
+        return user.Id;
     }
 
     public async Task<bool> SetFirstPasswordAsync(
@@ -83,13 +170,16 @@ public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvision
         if (user == null)
             return false;
 
+        if (ResolveSocialProvider(user) != null)
+            throw new InvalidOperationException("This account uses Google or Microsoft sign-in. Use social login instead.");
+
         if (!string.IsNullOrEmpty(user.PasswordHash))
             throw new InvalidOperationException("Password is already set. Use login instead.");
 
         user.SetPasswordHash(BCrypt.Net.BCrypt.HashPassword(password.Trim()));
         user.SetLoginType("EZOFIS");
         await context.SaveChangesAsync(cancellationToken);
-        await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, user.Role, cancellationToken);
+        await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, user.Role, user.Id, cancellationToken);
         return true;
     }
 
@@ -116,5 +206,60 @@ public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvision
         if (normalized.IndexOf('@') < 1)
             throw new ArgumentException("A valid email is required.");
         return normalized;
+    }
+
+    private static string? ResolveSocialProvider(User user)
+    {
+        var loginType = user.LoginType?.Trim() ?? string.Empty;
+        var authStrategy = user.AuthStrategy?.Trim() ?? string.Empty;
+
+        if (loginType.Equals("GOOGLE", StringComparison.OrdinalIgnoreCase)
+            || loginType.Equals("Google", StringComparison.OrdinalIgnoreCase)
+            || authStrategy.Equals(User.AuthStrategyGoogle, StringComparison.OrdinalIgnoreCase))
+        {
+            return "google";
+        }
+
+        if (loginType.Equals("MICROSOFT", StringComparison.OrdinalIgnoreCase)
+            || loginType.Equals("Microsoft", StringComparison.OrdinalIgnoreCase)
+            || loginType.Equals("OFFICE365", StringComparison.OrdinalIgnoreCase)
+            || loginType.Equals("Office365", StringComparison.OrdinalIgnoreCase)
+            || authStrategy.Equals(User.AuthStrategyOffice365, StringComparison.OrdinalIgnoreCase))
+        {
+            return "microsoft";
+        }
+
+        return null;
+    }
+
+    private static string? NormalizeSocialProvider(string provider)
+    {
+        var value = provider.Trim();
+        if (value.Equals("google", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("GOOGLE", StringComparison.OrdinalIgnoreCase))
+        {
+            return "google";
+        }
+
+        if (value.Equals("microsoft", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("MICROSOFT", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("office365", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("Office365", StringComparison.OrdinalIgnoreCase))
+        {
+            return "microsoft";
+        }
+
+        return null;
+    }
+
+    private static void ApplySocialLogin(User user, string normalizedProvider)
+    {
+        if (normalizedProvider == "google")
+        {
+            user.SetLoginType("GOOGLE");
+            return;
+        }
+
+        user.SetLoginType("MICROSOFT");
     }
 }

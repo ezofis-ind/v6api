@@ -87,10 +87,18 @@ namespace SaaSApp.Catalog.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PreQuestionsJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Email", "TenantId")
                         .IsUnique();
+
+                    b.HasIndex("UserId", "TenantId");
 
                     b.ToTable("UserTenants", "catalog");
                 });

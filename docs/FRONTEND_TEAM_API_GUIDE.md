@@ -5,6 +5,8 @@
 **Base URL example:** `https://localhost:44311` or `https://your-host/V6API`  
 **Auth (most routes):** `Authorization: Bearer <JWT>` + `X-Tenant-Id: <tenant-guid>`
 
+> **Also see:** [`TEAM_API_GUIDE_CREDITS_AND_WORKFLOW_SHARE.md`](./TEAM_API_GUIDE_CREDITS_AND_WORKFLOW_SHARE.md) — credit billing APIs + workflow inbox file share (verify concept).
+
 ---
 
 ## Table of contents

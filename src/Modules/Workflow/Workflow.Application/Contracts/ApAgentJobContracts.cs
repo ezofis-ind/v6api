@@ -59,6 +59,9 @@ public interface IApAgentJobProgressService
 
     Task<ApAgentJobProgressRow?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken = default);
 
+    /// <summary>Creates workflow.ApAgentJobProgress if missing (tenant DB).</summary>
+    Task EnsureProgressTableAsync(CancellationToken cancellationToken = default);
+
     Task<string?> GetLatestActiveJobIdForInstanceAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default);

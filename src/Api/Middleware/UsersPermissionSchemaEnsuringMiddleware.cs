@@ -23,8 +23,9 @@ public sealed class UsersPermissionSchemaEnsuringMiddleware
         var needsPermissionCategories = RequiresPermissionCategories(method, path);
         var needsMenus = RequiresMenus(method, path);
         var needsRoleMenus = RequiresRoleMenus(method, path);
+        var needsExtendedUserColumns = RequiresExtendedUserColumns(path);
 
-        if (!needsPermissionCategories && !needsMenus && !needsRoleMenus)
+        if (!needsPermissionCategories && !needsMenus && !needsRoleMenus && !needsExtendedUserColumns)
         {
             await _next(context);
             return;
@@ -36,6 +37,15 @@ public sealed class UsersPermissionSchemaEnsuringMiddleware
         {
             await _next(context);
             return;
+        }
+
+        if (needsExtendedUserColumns)
+        {
+            await TenantSchemaEnsureHelper.EnsureExtendedUserColumnsAsync(
+                tenantId.Value,
+                conn,
+                () => UsersSchemaEnsurer.EnsureExtendedUserColumnsAsync(conn, context.RequestAborted),
+                context.RequestAborted);
         }
 
         if (needsPermissionCategories)
@@ -66,6 +76,20 @@ public sealed class UsersPermissionSchemaEnsuringMiddleware
         }
 
         await _next(context);
+    }
+
+    private static bool RequiresExtendedUserColumns(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+
+        if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (path.Equals("/api/usersession", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return path.StartsWith("/api/users", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool RequiresPermissionCategories(string method, string? path)

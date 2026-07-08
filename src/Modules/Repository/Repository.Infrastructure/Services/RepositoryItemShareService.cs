@@ -195,11 +195,17 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
             connectionString, repo, share.SourceRepositoryId, share.SourceItemId, cancellationToken);
 
         var orgName = await GetTenantNameAsync(share.SourceTenantId, cancellationToken);
-        var requiresPasswordSetup = share.AutoProvisionGuest
-            && await _guestProvisioning.RequiresPasswordSetupAsync(
+        var authInfo = share.AutoProvisionGuest
+            ? await _guestProvisioning.GetShareInviteAuthInfoAsync(
                 share.SourceTenantId,
                 share.RecipientEmail,
-                cancellationToken);
+                cancellationToken)
+            : new ShareInviteAuthInfo(
+                false,
+                false,
+                null,
+                ["password_login"],
+                null);
 
         return new RepositoryItemSharePreviewDto(
             share.ShareToken,
@@ -211,7 +217,10 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
             share.RecipientEmail,
             share.ExpiresAtUtc,
             RequiresLogin: true,
-            requiresPasswordSetup,
+            authInfo.RequiresPasswordSetup,
+            authInfo.RequiredSocialProvider,
+            authInfo.AllowedAuthMethods,
+            authInfo.LoginType,
             share.AutoProvisionGuest,
             share.WorkflowInstanceId);
     }

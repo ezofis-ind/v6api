@@ -48,6 +48,7 @@ public sealed class WorkflowTableCreator : IWorkflowTableCreator
         {
             await EnsureLegacyTransactionTableAsync(workflowId, connectionString, cancellationToken);
             await EnsureLegacyMailboxTablesAsync(workflowId, connectionString, cancellationToken);
+            await EnsureAgentDataValidationTableAsync(workflowId, connectionString, cancellationToken);
             return;
         }
 

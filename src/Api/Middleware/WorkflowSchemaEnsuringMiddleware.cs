@@ -21,7 +21,7 @@ public sealed class WorkflowSchemaEnsuringMiddleware
         IWorkflowSchemaService schemaService)
     {
         var path = context.Request.Path.Value ?? "";
-        if (!path.StartsWith("/api/Workflows", StringComparison.OrdinalIgnoreCase))
+        if (!path.Contains("/Workflows", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;

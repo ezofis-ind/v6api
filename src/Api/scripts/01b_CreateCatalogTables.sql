@@ -76,6 +76,27 @@ BEGIN
         ALTER TABLE [catalog].[UserTenants] ADD [IsSuperuser] BIT NOT NULL DEFAULT 0;
         PRINT '✓ IsSuperuser column added to catalog.UserTenants';
     END
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('catalog.UserTenants') AND name = 'PreQuestionsJson')
+    BEGIN
+        ALTER TABLE [catalog].[UserTenants] ADD [PreQuestionsJson] NVARCHAR(MAX) NULL;
+        PRINT '✓ PreQuestionsJson column added to catalog.UserTenants';
+    END
+
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('catalog.UserTenants') AND name = 'UserId')
+    BEGIN
+        ALTER TABLE [catalog].[UserTenants] ADD [UserId] UNIQUEIDENTIFIER NULL;
+        PRINT '✓ UserId column added to catalog.UserTenants';
+    END
+
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE name = N'IX_UserTenants_UserId_TenantId'
+          AND object_id = OBJECT_ID(N'catalog.UserTenants'))
+    BEGIN
+        CREATE INDEX [IX_UserTenants_UserId_TenantId] ON [catalog].[UserTenants] ([UserId], [TenantId]);
+        PRINT '✓ IX_UserTenants_UserId_TenantId index created';
+    END
 END
 GO
 

@@ -14,7 +14,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Billing.Application\SaaSApp.Billing.Application.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\Catalog\SaaSApp.Catalog.csproj" />
     <ProjectReference Include="..\..\..\BuildingBlocks\MultiTenancy\SaaSApp.MultiTenancy.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
   </ItemGroup>
 
 </Project>

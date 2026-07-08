@@ -15,6 +15,7 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
     private readonly IWorkflowTableCreator _tableCreator;
     private readonly IWorkflowStartBootstrapService _startBootstrap;
     private readonly IApAgentPythonJobClient _apAgentPythonJobClient;
+    private readonly IApAgentJobProgressService _apAgentJobProgress;
     private readonly ILogger<StartWorkflowCommandHandler> _logger;
 
     public StartWorkflowCommandHandler(
@@ -25,6 +26,7 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
         IWorkflowTableCreator tableCreator,
         IWorkflowStartBootstrapService startBootstrap,
         IApAgentPythonJobClient apAgentPythonJobClient,
+        IApAgentJobProgressService apAgentJobProgress,
         ILogger<StartWorkflowCommandHandler> logger)
     {
         _repository = repository;
@@ -34,6 +36,7 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
         _tableCreator = tableCreator;
         _startBootstrap = startBootstrap;
         _apAgentPythonJobClient = apAgentPythonJobClient;
+        _apAgentJobProgress = apAgentJobProgress;
         _logger = logger;
     }
 
@@ -53,6 +56,7 @@ public sealed class StartWorkflowCommandHandler : IRequestHandler<StartWorkflowC
             ?? throw new InvalidOperationException("Tenant connection string not resolved.");
 
         await _tableCreator.EnsureWorkflowTablesForStartAsync(workflow.Id, connectionString, cancellationToken);
+        await _apAgentJobProgress.EnsureProgressTableAsync(cancellationToken);
 
         var instance = WorkflowInstance.Create(tenantId, workflow.Id, workflow.Name, workflow.Version, userId, request.Context);
         instance.Start();
