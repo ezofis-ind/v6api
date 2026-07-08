@@ -48,6 +48,7 @@ public sealed class TenantSignupService : ITenantSignupService
     private readonly IRepositorySchemaService _repositorySchema;
     private readonly IRepositoryStorageSeedService _repositoryStorageSeed;
     private readonly TenantPilotUserOptions _pilotUserOptions;
+    private readonly TenantDefaultCreditOptions _defaultCreditOptions;
 
     public TenantSignupService(
         ITenantDatabaseCreator dbCreator,
@@ -56,7 +57,8 @@ public sealed class TenantSignupService : ITenantSignupService
         IUserTenantRegistry userTenantRegistry,
         IRepositorySchemaService repositorySchema,
         IRepositoryStorageSeedService repositoryStorageSeed,
-        IOptions<TenantPilotUserOptions> pilotUserOptions)
+        IOptions<TenantPilotUserOptions> pilotUserOptions,
+        IOptions<TenantDefaultCreditOptions> defaultCreditOptions)
     {
         _dbCreator = dbCreator;
         _catalogFactory = catalogFactory;
@@ -65,6 +67,7 @@ public sealed class TenantSignupService : ITenantSignupService
         _repositorySchema = repositorySchema;
         _repositoryStorageSeed = repositoryStorageSeed;
         _pilotUserOptions = pilotUserOptions.Value;
+        _defaultCreditOptions = defaultCreditOptions.Value;
     }
 
     public async Task<TenantSignupResult> SignupAsync(TenantSignupRequest request, CancellationToken cancellationToken = default)
@@ -155,10 +158,12 @@ public sealed class TenantSignupService : ITenantSignupService
                 throw new InvalidOperationException("Tenant name already exists. Please use a different organization/name.");
             }
 
+            await SeedDefaultCreditMasterAsync(catalog, tenantId, cancellationToken);
+
             var adminEmail = request.Email?.Trim();
             if (!string.IsNullOrEmpty(adminEmail))
             {
-                await CreateTenantUserAsync(
+                var adminUserId = await CreateTenantUserAsync(
                     tenantConnectionString,
                     tenantId,
                     adminEmail,
@@ -169,7 +174,12 @@ public sealed class TenantSignupService : ITenantSignupService
                     request.FirstName,
                     request.LastName,
                     cancellationToken);
-                await _userTenantRegistry.AddOrUpdateAsync(adminEmail, tenantId, User.RoleAdmin, cancellationToken);
+                await _userTenantRegistry.AddOrUpdateAsync(
+                    adminEmail,
+                    tenantId,
+                    User.RoleAdmin,
+                    adminUserId,
+                    cancellationToken);
             }
 
             await CreatePilotUserIfConfiguredAsync(
@@ -180,6 +190,80 @@ public sealed class TenantSignupService : ITenantSignupService
         }
 
         return new TenantSignupResult(tenantId, displayName, dbName, tenantConnectionString);
+    }
+
+    /// <summary>
+    /// Seeds the default credit allocation into catalog dbo.creditMaster for the tenant's signup month.
+    /// Failures here never block tenant creation (e.g. when the creditMaster table has not been provisioned).
+    /// </summary>
+    private async Task SeedDefaultCreditMasterAsync(
+        CatalogDbContext catalog,
+        Guid tenantId,
+        CancellationToken cancellationToken)
+    {
+        if (!_defaultCreditOptions.Enabled)
+            return;
+
+        try
+        {
+            var nowUtc = DateTime.UtcNow;
+            var ist = GetIndiaTimeZone();
+            var nowIst = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, ist);
+            var month = nowIst.Month;
+            var year = nowIst.Year;
+
+            var alreadyExists = await catalog.CreditMasters.AnyAsync(
+                c => c.TenantId == tenantId
+                     && c.AllocationMonth == month
+                     && c.AllocationYear == year
+                     && c.CreditType == _defaultCreditOptions.CreditType
+                     && !c.IsDeleted,
+                cancellationToken);
+            if (alreadyExists)
+                return;
+
+            var initial = Math.Max(0, _defaultCreditOptions.InitialCredit);
+            DateTime? validTo = _defaultCreditOptions.ValidDays > 0
+                ? nowUtc.AddDays(_defaultCreditOptions.ValidDays)
+                : null;
+
+            catalog.CreditMasters.Add(new CreditMaster
+            {
+                TenantId = tenantId,
+                AllocationMonth = month,
+                AllocationYear = year,
+                CreditType = _defaultCreditOptions.CreditType,
+                SubscriptionType = _defaultCreditOptions.SubscriptionType,
+                Status = _defaultCreditOptions.Status,
+                InitialCredit = initial,
+                BalanceCredit = initial,
+                OverallConsumedCredit = 0,
+                Remarks = _defaultCreditOptions.Remarks,
+                CreatedAt = nowUtc,
+                CreatedBy = "system",
+                IsDeleted = false,
+                ValidFromDate = nowUtc,
+                ValidToDate = validTo
+            });
+
+            await catalog.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: default creditMaster seed failed for tenant {tenantId}: {ex.Message}");
+        }
+    }
+
+    private static TimeZoneInfo GetIndiaTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+        }
     }
 
     private string BuildTenantConnectionString(string databaseName)
@@ -229,7 +313,7 @@ public sealed class TenantSignupService : ITenantSignupService
         if (string.Equals(pilotEmail, adminEmail, StringComparison.OrdinalIgnoreCase))
             return;
 
-        await CreateTenantUserAsync(
+        var pilotUserId = await CreateTenantUserAsync(
             tenantConnectionString,
             tenantId,
             pilotEmail,
@@ -251,10 +335,11 @@ public sealed class TenantSignupService : ITenantSignupService
             string.IsNullOrWhiteSpace(_pilotUserOptions.Role)
                 ? User.RoleTenantUser
                 : _pilotUserOptions.Role.Trim(),
+            pilotUserId,
             cancellationToken);
     }
 
-    private static async Task CreateTenantUserAsync(
+    private static async Task<Guid?> CreateTenantUserAsync(
         string tenantConnectionString,
         Guid tenantId,
         string email,
@@ -280,11 +365,11 @@ public sealed class TenantSignupService : ITenantSignupService
         await UsersSchemaEnsurer.EnsureExtendedUserColumnsAsync(context, cancellationToken);
 
         var normalizedEmail = email.Trim();
-        var exists = await context.Users.AnyAsync(
-            u => u.Email == normalizedEmail && !u.IsDeleted,
-            cancellationToken);
-        if (exists)
-            return;
+        var existing = await context.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Email == normalizedEmail && !u.IsDeleted, cancellationToken);
+        if (existing != null)
+            return existing.Id;
 
         var user = User.Create(
             tenantId,
@@ -300,6 +385,7 @@ public sealed class TenantSignupService : ITenantSignupService
 
         context.Users.Add(user);
         await context.SaveChangesAsync(cancellationToken);
+        return user.Id;
     }
 
     private static async Task ApplyWorkflowSchemaAsync(string tenantConnectionString, CancellationToken cancellationToken)

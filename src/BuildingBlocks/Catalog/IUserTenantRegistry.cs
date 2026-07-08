@@ -5,5 +5,23 @@ namespace SaaSApp.Catalog;
 /// </summary>
 public interface IUserTenantRegistry
 {
-    Task AddOrUpdateAsync(string email, Guid tenantId, string role, CancellationToken cancellationToken = default);
+    Task AddOrUpdateAsync(
+        string email,
+        Guid tenantId,
+        string role,
+        Guid? userId = null,
+        CancellationToken cancellationToken = default);
+
+    Task<UserPreQuestionsResponse?> GetPreQuestionsAsync(
+        Guid userId,
+        Guid tenantId,
+        string email,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> UpdatePreQuestionsAsync(
+        Guid userId,
+        Guid tenantId,
+        string email,
+        IReadOnlyList<PreQuestionAnswerDto> questions,
+        CancellationToken cancellationToken = default);
 }

@@ -12,16 +12,31 @@ public interface IShareGuestUserProvisioningService
         string email,
         CancellationToken cancellationToken = default);
 
-    /// <summary>True when the user exists in the tenant but has no password hash yet.</summary>
+    /// <summary>True when the user exists in the tenant but has no password hash yet (EZOFIS only).</summary>
     Task<bool> RequiresPasswordSetupAsync(
         Guid tenantId,
         string email,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Sets the first password for a guest-invited user.</summary>
+    /// <summary>Resolves whether share invite needs password setup or Google/Microsoft social login.</summary>
+    Task<ShareInviteAuthInfo> GetShareInviteAuthInfoAsync(
+        Guid tenantId,
+        string email,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Sets the first password for a guest-invited user (EZOFIS only).</summary>
     Task<bool> SetFirstPasswordAsync(
         Guid tenantId,
         string email,
         string password,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Locks a pending guest (no password yet) to Google or Microsoft on first social sign-in.
+    /// </summary>
+    Task<Guid> ConfirmGuestSocialLoginAsync(
+        Guid tenantId,
+        string email,
+        string provider,
         CancellationToken cancellationToken = default);
 }

@@ -113,16 +113,43 @@ internal static class RepositoryItemFilterHelper
         }
     }
 
-    public static string ResolveSortColumn(string sortBy, HashSet<string> allowedColumns)
+    public static string ResolveSortColumn(string sortBy, HashSet<string> allowedColumns, HashSet<string>? tableColumns = null)
     {
         var mapped = RepositorySqlHelper.MapSortColumn(sortBy);
-        if (allowedColumns.Contains(mapped))
-            return mapped;
+        var candidates = SortColumnCandidates(mapped, sortBy);
+        foreach (var col in candidates)
+        {
+            if (!allowedColumns.Contains(col))
+                continue;
+            if (tableColumns != null && !tableColumns.Contains(col))
+                continue;
 
-        var col = RepositorySqlHelper.SanitizeColumnName(sortBy);
-        if (allowedColumns.Contains(col))
             return col;
+        }
 
         return allowedColumns.Contains("CreatedAtUtc") ? "CreatedAtUtc" : "FileName";
+    }
+
+    private static IEnumerable<string> SortColumnCandidates(string mapped, string rawSortBy)
+    {
+        yield return mapped;
+
+        if (!string.Equals(mapped, rawSortBy, StringComparison.OrdinalIgnoreCase))
+            yield return RepositorySqlHelper.SanitizeColumnName(rawSortBy);
+
+        foreach (var col in mapped switch
+        {
+            "DocumentDate" => new[] { "InvoiceDate", "PODate" },
+            "Supplier" => new[] { "VendorName", "Vendor" },
+            "InvoiceNumber" => new[] { "InvoiceNo" },
+            "Amount" => new[] { "InvoiceAmount", "POAmount" },
+            "AiStatus" => new[] { "MatchedStatus" },
+            "Status" => new[] { "StageStatus" },
+            "OcrScore" => Array.Empty<string>(),
+            _ => Array.Empty<string>()
+        })
+        {
+            yield return col;
+        }
     }
 }

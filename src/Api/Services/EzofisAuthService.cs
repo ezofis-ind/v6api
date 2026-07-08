@@ -55,6 +55,9 @@ public sealed class EzofisAuthService : IEzofisAuthService
 
         if (string.IsNullOrEmpty(user.PasswordHash))
         {
+            if (!IsEzofisPasswordUser(user))
+                throw new UnauthorizedAccessException($"You should login with {DescribeExpectedProvider(user)}.");
+
             return new LoginRequiresPasswordSetup(
                 tenantId,
                 user.Id,
@@ -108,6 +111,18 @@ public sealed class EzofisAuthService : IEzofisAuthService
             throw new UnauthorizedAccessException("Email does not match this share invite.");
 
         var tenantId = preview.SourceTenantId;
+        var authInfo = await _guestProvisioning.GetShareInviteAuthInfoAsync(tenantId, email.Trim(), cancellationToken);
+        if (authInfo.RequiredSocialProvider != null)
+        {
+            throw new UnauthorizedAccessException(
+                $"This account uses {authInfo.RequiredSocialProvider} sign-in. Use POST /api/auth/share/social-login instead.");
+        }
+
+        if (!authInfo.AllowedAuthMethods.Contains("password_setup", StringComparer.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Password setup is not available for this account. Use login or social sign-in.");
+        }
+
         var userId = await _guestProvisioning.EnsureGuestUserAsync(tenantId, email.Trim(), cancellationToken);
 
         var updated = await _guestProvisioning.SetFirstPasswordAsync(tenantId, email.Trim(), password, cancellationToken);
@@ -119,6 +134,55 @@ public sealed class EzofisAuthService : IEzofisAuthService
             GenerateJwt(userId, email.Trim().ToLowerInvariant(), email.Trim(), SaaSApp.Users.Domain.Entities.User.RoleTenantUser, tenantId),
             "Bearer",
             (int)AccessTokenExpiry.TotalSeconds);
+    }
+
+    public async Task<LoginResult> SetShareInviteSocialLoginAsync(
+        string shareToken,
+        string email,
+        string provider,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(shareToken))
+            throw new ArgumentException("ShareToken is required.");
+        if (string.IsNullOrWhiteSpace(email))
+            throw new ArgumentException("Email is required.");
+        if (string.IsNullOrWhiteSpace(provider))
+            throw new ArgumentException("Provider is required (google or microsoft).");
+
+        var preview = await _shareService.GetPreviewAsync(shareToken.Trim(), cancellationToken)
+            ?? throw new UnauthorizedAccessException("Invalid or expired share link.");
+
+        if (!preview.AutoProvisionGuest)
+            throw new UnauthorizedAccessException("This share link does not support guest social login.");
+
+        if (!string.Equals(preview.RecipientEmail, email.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Email does not match this share invite.");
+
+        var tenantId = preview.SourceTenantId;
+        var authInfo = await _guestProvisioning.GetShareInviteAuthInfoAsync(tenantId, email.Trim(), cancellationToken);
+        var normalizedProvider = provider.Trim();
+        if (authInfo.RequiredSocialProvider != null
+            && !authInfo.RequiredSocialProvider.Equals(normalizedProvider, StringComparison.OrdinalIgnoreCase)
+            && !authInfo.RequiredSocialProvider.Equals(
+                normalizedProvider.Equals("office365", StringComparison.OrdinalIgnoreCase) ? "microsoft" : normalizedProvider,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException(
+                $"This account must sign in with {authInfo.RequiredSocialProvider}.");
+        }
+
+        if (!authInfo.AllowedAuthMethods.Any(m =>
+                m.Equals(normalizedProvider, StringComparison.OrdinalIgnoreCase)
+                || (m.Equals("microsoft", StringComparison.OrdinalIgnoreCase)
+                    && normalizedProvider.Equals("office365", StringComparison.OrdinalIgnoreCase))))
+        {
+            throw new UnauthorizedAccessException("Social sign-in is not available for this share invite.");
+        }
+
+        await _guestProvisioning.EnsureGuestUserAsync(tenantId, email.Trim(), cancellationToken);
+        await _guestProvisioning.ConfirmGuestSocialLoginAsync(tenantId, email.Trim(), provider, cancellationToken);
+
+        return await SocialLoginAsync(email.Trim(), provider, tenantId, cancellationToken);
     }
 
     public async Task<LoginResult> CompleteTwoFactorAsync(string tempToken, string code, CancellationToken cancellationToken = default)

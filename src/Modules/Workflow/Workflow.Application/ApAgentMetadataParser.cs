@@ -7,7 +7,7 @@ namespace SaaSApp.Workflow.Application;
 /// </summary>
 public static class ApAgentMetadataParser
 {
-    private static readonly string[] InvoiceHeaderKeys = ["invoice_header", "invoiceHeader", "header"];
+    private static readonly string[] InvoiceHeaderKeys = ["invoice_header", "invoiceHeader", "header", "po_row", "Extracted Invoice JSON"];
     /// <summary>Accepted JSON property names for the line-items array (case-insensitive).</summary>
     public static readonly string[] LineItemKeys =
     [
@@ -33,13 +33,21 @@ public static class ApAgentMetadataParser
         {
             ["Invoice No"] = "InvoiceNumber",
             ["InvoiceNo"] = "InvoiceNumber",
+            ["Invoice Number"] = "InvoiceNumber",
             ["Vendor Name"] = "Supplier",
             ["VendorName"] = "Supplier",
+            ["Vendor"] = "Supplier",
             ["Invoice Date"] = "DocumentDate",
             ["InvoiceDate"] = "DocumentDate",
+            ["PO Date"] = "PoDate",
+            ["PODate"] = "PoDate",
+            ["PO DATE"] = "PoDate",
             ["Invoice Amount"] = "Amount",
             ["InvoiceAmount"] = "Amount",
+            ["PO Amount"] = "PoAmount",
+            ["POAmount"] = "PoAmount",
             ["Invoice Tax Amount"] = "InvoiceTaxAmount",
+            ["InvoiceTaxAmount"] = "InvoiceTaxAmount",
             ["Subtotal"] = "Subtotal",
             ["currency"] = "Currency",
             ["TERMS"] = "Terms",
@@ -50,9 +58,23 @@ public static class ApAgentMetadataParser
             ["Department"] = "Department",
             ["Cost Center"] = "CostCenter",
             ["Matched Status"] = "MatchedStatus",
+            ["decision"] = "MatchedStatus",
             ["PoNumber"] = "PoNumber",
             ["PONumber"] = "PoNumber",
             ["PO Number"] = "PoNumber",
+            ["PO No"] = "PoNumber",
+            ["Buyer Name"] = "Buyer",
+            ["Supplier Address"] = "SupplierAddress",
+            ["Vendor Address"] = "SupplierAddress",
+            ["VendorAddress"] = "SupplierAddress",
+            ["Ship To Address"] = "ShipToAddress",
+            ["Ship-To Address"] = "ShipToAddress",
+            ["ShipToAddress"] = "ShipToAddress",
+            ["Pay To Address"] = "PayToAddress",
+            ["Pay-To Address"] = "PayToAddress",
+            ["PayToAddress"] = "PayToAddress",
+            ["Document Type"] = "DocumentType",
+            ["DocumentType"] = "DocumentType",
         };
 
     public static (IReadOnlyDictionary<string, string> Fields, string? LineItemsJson) ParseFieldsPayload(JsonElement fieldsRoot)
@@ -68,8 +90,16 @@ public static class ApAgentMetadataParser
             if (!TryGetPropertyIgnoreCase(fieldsRoot, headerKey, out var header) || header.ValueKind != JsonValueKind.Object)
                 continue;
 
+            if (string.Equals(headerKey, "Extracted Invoice JSON", StringComparison.OrdinalIgnoreCase))
+            {
+                var (nestedFields, nestedLineItemsJson) = ParseFieldsPayload(header);
+                foreach (var (key, value) in nestedFields)
+                    flat[key] = value;
+                lineItemsJson ??= nestedLineItemsJson;
+                continue;
+            }
+
             FlattenObject(header, flat);
-            break;
         }
 
         if (TryGetLineItemsElement(fieldsRoot, out var linesElement))
@@ -78,20 +108,17 @@ public static class ApAgentMetadataParser
                 ?? throw new ArgumentException("Line items must be a JSON array (or JSON string containing an array).");
         }
 
-        if (flat.Count == 0)
+        foreach (var prop in fieldsRoot.EnumerateObject())
         {
-            foreach (var prop in fieldsRoot.EnumerateObject())
-            {
-                if (IsReservedSectionKey(prop.Name))
-                    continue;
+            if (IsReservedSectionKey(prop.Name))
+                continue;
 
-                if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
-                    continue;
+            if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                continue;
 
-                var value = JsonValueToString(prop.Value);
-                if (!string.IsNullOrWhiteSpace(value))
-                    flat[prop.Name.Trim()] = value;
-            }
+            var value = JsonValueToString(prop.Value);
+            if (!string.IsNullOrWhiteSpace(value))
+                flat[prop.Name.Trim()] = value;
         }
 
         AddRepositoryAliases(flat);
@@ -117,12 +144,78 @@ public static class ApAgentMetadataParser
     {
         foreach (var (key, value) in flat.ToList())
         {
-            if (!HeaderToRepositoryAliases.TryGetValue(key, out var alias))
+            if (string.IsNullOrWhiteSpace(value))
                 continue;
-            if (!flat.ContainsKey(alias))
+
+            if (HeaderToRepositoryAliases.TryGetValue(key, out var alias) && !flat.ContainsKey(alias))
                 flat[alias] = value;
+
+            if (RepositoryColumnTargets.TryGetValue(key, out var targets))
+            {
+                foreach (var target in targets)
+                {
+                    if (!flat.ContainsKey(target))
+                        flat[target] = value;
+                }
+            }
+        }
+
+        AddSupplementaryRepositoryColumnAliases(flat);
+    }
+
+    /// <summary>Map agent header labels directly onto repository SQL column names used in tenant tables.</summary>
+    private static readonly Dictionary<string, string[]> RepositoryColumnTargets =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Invoice No"] = ["InvoiceNo", "InvoiceNumber"],
+            ["InvoiceNo"] = ["InvoiceNo", "InvoiceNumber"],
+            ["Invoice Number"] = ["InvoiceNo", "InvoiceNumber"],
+            ["Invoice Amount"] = ["InvoiceAmount", "Amount"],
+            ["InvoiceAmount"] = ["InvoiceAmount", "Amount"],
+            ["Invoice Date"] = ["InvoiceDate", "DocumentDate"],
+            ["InvoiceDate"] = ["InvoiceDate", "DocumentDate"],
+            ["Invoice Tax Amount"] = ["InvoiceTaxAmount"],
+            ["PO Number"] = ["PONumber", "PoNumber"],
+            ["PONumber"] = ["PONumber", "PoNumber"],
+            ["PO Date"] = ["PODate"],
+            ["PO Amount"] = ["POAmount", "PoAmount"],
+            ["Vendor Name"] = ["Supplier"],
+            ["VENDOR Name"] = ["Supplier"],
+            ["Vendor Address"] = ["SupplierAddress"],
+            ["Ship To Address"] = ["ShipToAddress"],
+            ["Pay To Address"] = ["PayToAddress"],
+            ["Document Type"] = ["DocumentType"],
+            ["Matched Status"] = ["MatchedStatus"],
+            ["decision"] = ["MatchedStatus"],
+        };
+
+    /// <summary>Duplicate canonical values onto common repository SQL column names.</summary>
+    private static void AddSupplementaryRepositoryColumnAliases(Dictionary<string, string> flat)
+    {
+        foreach (var (canonical, extras) in SupplementaryRepositoryColumnAliases)
+        {
+            if (!flat.TryGetValue(canonical, out var value) || string.IsNullOrWhiteSpace(value))
+                continue;
+
+            foreach (var extra in extras)
+            {
+                if (!flat.ContainsKey(extra))
+                    flat[extra] = value;
+            }
         }
     }
+
+    private static readonly Dictionary<string, string[]> SupplementaryRepositoryColumnAliases =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["InvoiceNumber"] = ["InvoiceNo"],
+            ["DocumentDate"] = ["InvoiceDate"],
+            ["Amount"] = ["InvoiceAmount"],
+            ["PoNumber"] = ["PONumber"],
+            ["PoDate"] = ["PODate"],
+            ["PoAmount"] = ["POAmount"],
+            ["MatchedStatus"] = ["Matched Status"],
+        };
 
     private static bool IsReservedSectionKey(string name) =>
         InvoiceHeaderKeys.Any(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase))

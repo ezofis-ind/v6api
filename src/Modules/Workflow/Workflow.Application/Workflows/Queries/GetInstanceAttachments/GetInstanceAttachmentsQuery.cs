@@ -23,6 +23,7 @@ public record AttachmentItem(
     string? ContentType,
     DateTime CreatedAtUtc,
     Guid CreatedBy,
+    string? UploadedBy,
     Guid? ModifiedBy,
     DateTime? ModifiedAtUtc,
     Guid? RepositoryId,

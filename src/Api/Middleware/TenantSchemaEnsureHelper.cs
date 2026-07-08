@@ -90,6 +90,29 @@ internal static class TenantSchemaEnsureHelper
             applySchema,
             cancellationToken);
 
+    public static Task EnsureExtendedUserColumnsAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "users-extended-columns",
+            connectionString,
+            """
+            SELECT 1
+            WHERE COL_LENGTH('users.Users', 'PasswordExpiryDays') IS NOT NULL
+              AND COL_LENGTH('users.Users', 'AccountExpiryDate') IS NOT NULL
+              AND COL_LENGTH('users.Users', 'ForcePasswordResetOnLogin') IS NOT NULL
+              AND COL_LENGTH('users.Users', 'EmployeeId') IS NOT NULL
+              AND COL_LENGTH('users.Users', 'BusinessUnit') IS NOT NULL
+              AND COL_LENGTH('users.Users', 'Location') IS NOT NULL
+              AND COL_LENGTH('users.Users', 'GroupName') IS NOT NULL
+              AND COL_LENGTH('users.Users', 'MfaMethods') IS NOT NULL
+            """,
+            applySchema,
+            cancellationToken);
+
     private static async Task EnsureOnceAsync(
         Guid tenantId,
         string schemaKey,

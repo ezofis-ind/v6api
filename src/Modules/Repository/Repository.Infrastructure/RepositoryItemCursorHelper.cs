@@ -111,6 +111,16 @@ internal static class RepositoryItemCursorHelper
             "RiskLevel" => row.RiskLevel,
             "Source" => row.Source,
             "Department" => row.Department,
+            "InvoiceDate" => row.InvoiceDate,
+            "InvoiceAmount" => row.InvoiceAmount,
+            "InvoiceTaxAmount" => row.InvoiceTaxAmount,
+            "PODate" => row.PoDate,
+            "POAmount" => row.PoAmount,
+            "Buyer" => row.Buyer,
+            "Terms" => row.Terms,
+            "SupplierAddress" => row.SupplierAddress,
+            "ShipToAddress" => row.ShipToAddress,
+            "PayToAddress" => row.PayToAddress,
             _ => null
         };
 }
