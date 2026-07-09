@@ -11,6 +11,9 @@ public interface IUserRepository
     /// <summary>Get user by ID.</summary>
     Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
+    /// <summary>Get users by IDs (excluding soft-deleted).</summary>
+    Task<IReadOnlyList<User>> GetByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);
+
     /// <summary>Get user by email (case-sensitive, trimmed).</summary>
     Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default);
 
