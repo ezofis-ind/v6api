@@ -93,17 +93,7 @@ public sealed class User : Entity<Guid>, ITenantEntity
         string? location,
         string? groupName,
         bool twoFactorAuthentication,
-        string? mfaMethods,
-        string? phoneNo,
-        string? language,
-        string? countryCode,
-        string? avatarPath,
-        string? uiPreference,
-        string? secondaryEmail,
-        string? userType,
-        string? idCardPath,
-        string? signaturePath,
-        Guid? createdBy)
+        string? mfaMethods)
     {
         Id = id;
         TenantId = tenantId;
@@ -127,16 +117,6 @@ public sealed class User : Entity<Guid>, ITenantEntity
         GroupName = string.IsNullOrWhiteSpace(groupName) ? null : groupName.Trim();
         TwoFactorAuthentication = twoFactorAuthentication;
         MfaMethods = string.IsNullOrWhiteSpace(mfaMethods) ? null : mfaMethods.Trim();
-        PhoneNo = string.IsNullOrWhiteSpace(phoneNo) ? null : phoneNo.Trim();
-        Language = string.IsNullOrWhiteSpace(language) ? null : language.Trim();
-        CountryCode = string.IsNullOrWhiteSpace(countryCode) ? null : countryCode.Trim();
-        AvatarPath = string.IsNullOrWhiteSpace(avatarPath) ? null : avatarPath.Trim();
-        UiPreference = string.IsNullOrWhiteSpace(uiPreference) ? null : uiPreference.Trim();
-        SecondaryEmail = string.IsNullOrWhiteSpace(secondaryEmail) ? null : secondaryEmail.Trim();
-        UserType = string.IsNullOrWhiteSpace(userType) ? null : userType.Trim();
-        IdCardPath = string.IsNullOrWhiteSpace(idCardPath) ? null : idCardPath.Trim();
-        SignaturePath = string.IsNullOrWhiteSpace(signaturePath) ? null : signaturePath.Trim();
-        CreatedBy = createdBy;
         CreatedAtUtc = DateTime.UtcNow;
         RaiseDomainEvent(new UserCreatedEvent(Guid.NewGuid(), DateTime.UtcNow, id, tenantId, email, displayName));
     }
@@ -163,17 +143,7 @@ public sealed class User : Entity<Guid>, ITenantEntity
         string? location = null,
         string? groupName = null,
         bool twoFactorAuthentication = false,
-        string? mfaMethods = null,
-        string? phoneNo = null,
-        string? language = null,
-        string? countryCode = null,
-        string? avatarPath = null,
-        string? uiPreference = null,
-        string? secondaryEmail = null,
-        string? userType = null,
-        string? idCardPath = null,
-        string? signaturePath = null,
-        Guid? createdBy = null)
+        string? mfaMethods = null)
     {
         return new User(
             Guid.NewGuid(),
@@ -197,53 +167,13 @@ public sealed class User : Entity<Guid>, ITenantEntity
             location,
             groupName,
             twoFactorAuthentication,
-            mfaMethods,
-            phoneNo,
-            language,
-            countryCode,
-            avatarPath,
-            uiPreference,
-            secondaryEmail,
-            userType,
-            idCardPath,
-            signaturePath,
-            createdBy);
+            mfaMethods);
     }
 
-    /// <summary>Update profile and extended fields. Only non-null parameters are applied.</summary>
-    public void Update(
-        string? displayName = null,
-        string? role = null,
-        string? firstName = null,
-        string? lastName = null,
-        string? phoneNo = null,
-        string? department = null,
-        string? jobTitle = null,
-        string? language = null,
-        string? countryCode = null,
-        string? avatarPath = null,
-        string? uiPreference = null,
-        string? email = null,
-        string? authStrategy = null,
-        string? loginName = null,
-        string? loginType = null,
-        int? passwordExpiryDays = null,
-        DateTime? accountExpiryDate = null,
-        bool? forcePasswordResetOnLogin = null,
-        bool? twoFactorAuthentication = null,
-        string? mfaMethods = null,
-        string? employeeId = null,
-        string? businessUnit = null,
-        Guid? managerId = null,
-        bool applyManagerId = false,
-        string? location = null,
-        string? groupName = null,
-        bool applyGroupName = false,
-        string? userType = null,
-        string? secondaryEmail = null,
-        string? idCardPath = null,
-        string? signaturePath = null,
-        Guid? modifiedBy = null)
+    /// <summary>Update profile fields. Only non-null parameters are applied.</summary>
+    public void Update(string? displayName = null, string? role = null, string? firstName = null, string? lastName = null,
+        string? phoneNo = null, string? department = null, string? jobTitle = null, string? language = null,
+        string? countryCode = null, string? avatarPath = null, string? uiPreference = null, Guid? modifiedBy = null)
     {
         if (displayName != null) DisplayName = displayName.Trim();
         if (role != null) Role = role.Trim();
@@ -256,24 +186,6 @@ public sealed class User : Entity<Guid>, ITenantEntity
         if (countryCode != null) CountryCode = countryCode.Trim();
         if (avatarPath != null) AvatarPath = avatarPath.Trim();
         if (uiPreference != null) UiPreference = uiPreference.Trim();
-        if (email != null) Email = email.Trim();
-        if (authStrategy != null) AuthStrategy = authStrategy.Trim();
-        if (loginName != null) LoginName = string.IsNullOrWhiteSpace(loginName) ? null : loginName.Trim();
-        if (loginType != null) LoginType = string.IsNullOrWhiteSpace(loginType) ? null : loginType.Trim();
-        if (passwordExpiryDays != null) PasswordExpiryDays = passwordExpiryDays.Value;
-        if (accountExpiryDate != null) AccountExpiryDate = accountExpiryDate;
-        if (forcePasswordResetOnLogin != null) ForcePasswordResetOnLogin = forcePasswordResetOnLogin.Value;
-        if (twoFactorAuthentication != null) TwoFactorAuthentication = twoFactorAuthentication.Value;
-        if (mfaMethods != null) MfaMethods = string.IsNullOrWhiteSpace(mfaMethods) ? null : mfaMethods.Trim();
-        if (employeeId != null) EmployeeId = string.IsNullOrWhiteSpace(employeeId) ? null : employeeId.Trim();
-        if (businessUnit != null) BusinessUnit = string.IsNullOrWhiteSpace(businessUnit) ? null : businessUnit.Trim();
-        if (applyManagerId) ManagerId = managerId;
-        if (location != null) Location = string.IsNullOrWhiteSpace(location) ? null : location.Trim();
-        if (applyGroupName) GroupName = string.IsNullOrWhiteSpace(groupName) ? null : groupName.Trim();
-        if (userType != null) UserType = string.IsNullOrWhiteSpace(userType) ? null : userType.Trim();
-        if (secondaryEmail != null) SecondaryEmail = string.IsNullOrWhiteSpace(secondaryEmail) ? null : secondaryEmail.Trim();
-        if (idCardPath != null) IdCardPath = string.IsNullOrWhiteSpace(idCardPath) ? null : idCardPath.Trim();
-        if (signaturePath != null) SignaturePath = string.IsNullOrWhiteSpace(signaturePath) ? null : signaturePath.Trim();
         ModifiedBy = modifiedBy;
         ModifiedAtUtc = DateTime.UtcNow;
     }

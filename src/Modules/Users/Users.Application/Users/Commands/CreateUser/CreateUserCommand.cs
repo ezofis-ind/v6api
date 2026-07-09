@@ -24,17 +24,7 @@ public record CreateUserCommand(
     string? Location = null,
     IReadOnlyList<string>? Groups = null,
     string? MfAuthentication = null,
-    string? MfaMethods = null,
-    string? PhoneNo = null,
-    string? Language = null,
-    string? CountryCode = null,
-    string? AvatarPath = null,
-    string? UiPreference = null,
-    string? SecondaryEmail = null,
-    string? UserType = null,
-    string? IdCardPath = null,
-    string? SignaturePath = null,
-    Guid? CreatedBy = null) : IRequest<CreateUserCommandResult>;
+    string? MfaMethods = null) : IRequest<CreateUserCommandResult>;
 
 /// <summary>Result of CreateUser.</summary>
 public record CreateUserCommandResult(

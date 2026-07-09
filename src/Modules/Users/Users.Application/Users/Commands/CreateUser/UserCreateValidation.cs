@@ -1,4 +1,3 @@
-using System.Net.Mail;
 using SaaSApp.Users.Domain.Entities;
 
 namespace SaaSApp.Users.Application.Users.Commands.CreateUser;
@@ -94,34 +93,18 @@ internal static class UserCreateValidation
     public static string? FormatGroupNamesForStorage(IReadOnlyList<string> groupNames) =>
         groupNames.Count == 0 ? null : string.Join(", ", groupNames);
 
-    public static bool IsValidEmail(string? email)
-    {
-        if (string.IsNullOrWhiteSpace(email))
-            return false;
-
-        try
-        {
-            _ = new MailAddress(email.Trim());
-            return true;
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-    }
-
-    public static DateTime? ResolveAccountExpiryDate(
+    public static DateTime ResolveAccountExpiryDate(
         DateTime? requestedAccountExpiryDate,
         int passwordExpiryDays,
         out string? error)
     {
         error = null;
-
-        if (requestedAccountExpiryDate == null)
-            return null;
-
         var utcToday = DateTime.UtcNow.Date;
         var minimumExpiryDate = utcToday.AddDays(passwordExpiryDays);
+
+        if (requestedAccountExpiryDate == null)
+            return minimumExpiryDate;
+
         var accountExpiryDate = requestedAccountExpiryDate.Value.Date;
         if (accountExpiryDate <= minimumExpiryDate)
         {

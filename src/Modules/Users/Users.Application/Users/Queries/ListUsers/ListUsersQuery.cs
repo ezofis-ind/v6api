@@ -1,5 +1,4 @@
 using MediatR;
-using SaaSApp.Users.Application.Users;
 
 namespace SaaSApp.Users.Application.Users.Queries.ListUsers;
 
@@ -7,4 +6,8 @@ namespace SaaSApp.Users.Application.Users.Queries.ListUsers;
 public record ListUsersQuery : IRequest<ListUsersQueryResult>;
 
 /// <summary>List of users for ListUsers response.</summary>
-public record ListUsersQueryResult(IReadOnlyList<UserExtendedResponse> Items);
+public record ListUsersQueryResult(IReadOnlyList<ListUsersItem> Items);
+
+/// <summary>User summary in list response.</summary>
+public record ListUsersItem(Guid Id, string Email, string DisplayName, string Role, DateTime CreatedAtUtc,
+    string? FirstName = null, string? LastName = null, string? AuthStrategy = null);

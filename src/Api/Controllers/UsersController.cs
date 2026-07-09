@@ -27,7 +27,6 @@ using SaaSApp.Users.Application.Menus.Queries.ListMenus;
 using SaaSApp.Users.Application.Menus.Queries.GetMenuById;
 using SaaSApp.Users.Application.Roles.Commands.SetRoleMenus;
 using SaaSApp.Users.Application.Roles.Queries.GetRoleMenus;
-using SaaSApp.Users.Application.Users;
 using SaaSApp.Users.Application.Users.Queries.GetCurrentUser;
 using SaaSApp.Users.Application.Users.Queries.GetUserById;
 using SaaSApp.Users.Application.Users.Queries.ListUsers;
@@ -59,7 +58,6 @@ public sealed class UsersController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateUserRequest request, CancellationToken cancellationToken)
     {
         var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
-        var createdBy = GetCurrentUserId();
         var command = new CreateUserCommand(
             request.Email,
             request.DisplayName,
@@ -81,17 +79,7 @@ public sealed class UsersController : ControllerBase
             request.Location,
             request.Group,
             request.MfAuthentication,
-            request.MfaMethods,
-            request.PhoneNo,
-            request.Language,
-            request.CountryCode,
-            request.AvatarPath,
-            request.UiPreference,
-            request.SecondaryEmail,
-            request.UserType,
-            request.IdCardPath,
-            request.SignaturePath,
-            createdBy);
+            request.MfaMethods);
         var result = await _mediator.Send(command, cancellationToken);
         if (!result.Success)
             return StatusCode(result.StatusCode, new { error = result.Error });
@@ -107,7 +95,7 @@ public sealed class UsersController : ControllerBase
 
     /// <summary>Current user profile and custom-role permissions (path is /api/usersession). Includes permissionCount and permissionKeys grouped by category.</summary>
     [HttpGet("/api/usersession")]
-    [ProducesResponseType(typeof(UserExtendedResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(CurrentUserDetailResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -456,7 +444,7 @@ public sealed class UsersController : ControllerBase
 
     /// <summary>Get a user by ID in the current tenant. Includes permissionCount and permissionKeys grouped by category.</summary>
     [HttpGet("{id:guid}")]
-    [ProducesResponseType(typeof(UserExtendedResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(GetUserByIdQueryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {
@@ -470,56 +458,12 @@ public sealed class UsersController : ControllerBase
     [HttpPut("{id:guid}")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserRequest request, CancellationToken cancellationToken)
     {
-        var modifiedBy = GetCurrentUserId();
-        var result = await _mediator.Send(new UpdateUserCommand(
-            id,
-            request.Email,
-            request.DisplayName,
-            request.Password,
-            request.Role,
-            request.FirstName,
-            request.LastName,
-            request.AuthStrategy,
-            request.UserName,
-            request.LoginType,
-            request.PasswordExpiryDays,
-            request.AccountExpiryDate,
-            request.ForcePasswordResetOnLogin,
-            request.JobTitle,
-            request.EmployeeId,
-            request.Department,
-            request.BusinessUnit,
-            request.Manager,
-            request.Location,
-            request.Group,
-            request.MfAuthentication,
-            request.MfaMethods,
-            request.PhoneNo,
-            request.Language,
-            request.CountryCode,
-            request.AvatarPath,
-            request.UiPreference,
-            request.SecondaryEmail,
-            request.UserType,
-            request.IdCardPath,
-            request.SignaturePath,
-            modifiedBy), cancellationToken);
-
-        if (!result.Success)
-            return StatusCode(result.StatusCode, new { error = result.Error });
+        var result = await _mediator.Send(new UpdateUserCommand(id, request.DisplayName, request.Role, request.FirstName, request.LastName, request.PhoneNo, request.Department, request.JobTitle, request.Language, request.CountryCode, request.AvatarPath, request.UiPreference), cancellationToken);
         if (!result.Found)
             return NotFound();
-
-        if (result.RegistryEmail != null && result.RegistryRole != null)
-        {
-            var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
-            await _userTenantRegistry.AddOrUpdateAsync(result.RegistryEmail, tenantId, result.RegistryRole, cancellationToken);
-        }
-
         return NoContent();
     }
 
@@ -598,70 +542,10 @@ public sealed class CreateUserRequest
 
     [JsonPropertyName("MFA Methods")]
     public string? MfaMethods { get; set; }
-
-    public string? PhoneNo { get; set; }
-    public string? Language { get; set; }
-    public string? CountryCode { get; set; }
-    public string? AvatarPath { get; set; }
-    public string? UiPreference { get; set; }
-    public string? SecondaryEmail { get; set; }
-    public string? UserType { get; set; }
-    public string? IdCardPath { get; set; }
-    public string? SignaturePath { get; set; }
 }
 
 /// <summary>Request to update a user. Only non-null fields are updated.</summary>
-public sealed class UpdateUserRequest
-{
-    public string? Email { get; set; }
-    public string? DisplayName { get; set; }
-    public string? Password { get; set; }
-    public string? Role { get; set; }
-    public string? FirstName { get; set; }
-    public string? LastName { get; set; }
-    public string? AuthStrategy { get; set; }
-    public string? UserName { get; set; }
-
-    [JsonPropertyName("LoginType")]
-    public string? LoginType { get; set; }
-
-    public int? PasswordExpiryDays { get; set; }
-    public DateTime? AccountExpiryDate { get; set; }
-    public string? ForcePasswordResetOnLogin { get; set; }
-
-    [JsonPropertyName("Job Title")]
-    public string? JobTitle { get; set; }
-
-    [JsonPropertyName("Employee Id")]
-    public string? EmployeeId { get; set; }
-
-    public string? Department { get; set; }
-
-    [JsonPropertyName("Bussiness Unit")]
-    public string? BusinessUnit { get; set; }
-
-    [JsonPropertyName("Manager")]
-    public string? Manager { get; set; }
-
-    public string? Location { get; set; }
-    public string[]? Group { get; set; }
-
-    [JsonPropertyName("MFAuthentication")]
-    public string? MfAuthentication { get; set; }
-
-    [JsonPropertyName("MFA Methods")]
-    public string? MfaMethods { get; set; }
-
-    public string? PhoneNo { get; set; }
-    public string? Language { get; set; }
-    public string? CountryCode { get; set; }
-    public string? AvatarPath { get; set; }
-    public string? UiPreference { get; set; }
-    public string? SecondaryEmail { get; set; }
-    public string? UserType { get; set; }
-    public string? IdCardPath { get; set; }
-    public string? SignaturePath { get; set; }
-}
+public record UpdateUserRequest(string? DisplayName, string? Role, string? FirstName = null, string? LastName = null, string? PhoneNo = null, string? Department = null, string? JobTitle = null, string? Language = null, string? CountryCode = null, string? AvatarPath = null, string? UiPreference = null);
 
 /// <summary>Request to create a custom role with assigned users and permissions.</summary>
 public record CreateRoleRequest(string RoleName, IReadOnlyList<Guid> Users, IReadOnlyList<string> Permissions, string? Description = null);
