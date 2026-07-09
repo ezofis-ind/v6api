@@ -1,5 +1,6 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
+using SaaSApp.Users.Application.Users;
 
 namespace SaaSApp.Users.Application.Users.Queries.ListUsers;
 
@@ -15,7 +16,27 @@ public sealed class ListUsersQueryHandler : IRequestHandler<ListUsersQuery, List
     public async Task<ListUsersQueryResult> Handle(ListUsersQuery request, CancellationToken cancellationToken)
     {
         var users = await _userRepository.ListAsync(cancellationToken);
-        var items = users.Select(u => new ListUsersItem(u.Id, u.Email, u.DisplayName, u.Role, u.CreatedAtUtc, u.FirstName, u.LastName, u.AuthStrategy)).ToList();
+
+        var managerIds = users
+            .Where(u => u.ManagerId != null)
+            .Select(u => u.ManagerId!.Value)
+            .Distinct()
+            .ToList();
+
+        var managers = await _userRepository.GetByIdsAsync(managerIds, cancellationToken);
+        var managerEmails = managers.ToDictionary(m => m.Id, m => m.Email);
+
+        var items = users
+            .Select(u =>
+            {
+                string? managerEmail = null;
+                if (u.ManagerId != null && managerEmails.TryGetValue(u.ManagerId.Value, out var email))
+                    managerEmail = email;
+
+                return UserExtendedResponseMapper.Map(u, managerEmail);
+            })
+            .ToList();
+
         return new ListUsersQueryResult(items);
     }
 }
