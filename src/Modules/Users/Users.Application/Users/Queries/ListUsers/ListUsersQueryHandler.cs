@@ -32,6 +32,7 @@ public sealed class ListUsersQueryHandler : IRequestHandler<ListUsersQuery, List
                 string? managerEmail = null;
                 if (u.ManagerId != null && managerEmails.TryGetValue(u.ManagerId.Value, out var email))
                     managerEmail = email;
+
                 return UserExtendedResponseMapper.Map(u, managerEmail);
             })
             .ToList();

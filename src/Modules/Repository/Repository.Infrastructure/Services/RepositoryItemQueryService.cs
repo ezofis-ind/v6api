@@ -58,7 +58,7 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
 
         var page = Math.Max(1, query.Page);
         var pageSize = Math.Clamp(query.PageSize, 1, RepositoryItemCursorHelper.MaxPageSize);
-        var sortCol = RepositoryItemFilterHelper.ResolveSortColumn(query.SortBy, allowedColumns);
+        var sortCol = RepositoryItemFilterHelper.ResolveSortColumn(query.SortBy, allowedColumns, tableColumns);
         if (!RepositoryItemTableColumns.Has(tableColumns, sortCol))
             sortCol = RepositoryItemTableColumns.Has(tableColumns, "CreatedAtUtc") ? "CreatedAtUtc" : "FileName";
 
@@ -109,7 +109,7 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
         }
 
         var whereSql = string.Join(" AND ", where);
-        var selectList = RepositoryItemListReader.BuildSelectList(tableColumns);
+        var selectList = RepositoryItemListReader.BuildSelectList(tableColumns, repo);
 
         int total = -1;
         if (!query.SkipTotal)
@@ -142,7 +142,7 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
             cmd.Parameters.AddWithValue("@PageSize", pageSize);
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
-                list.Add(RepositoryItemListReader.ReadRow(reader, tableColumns));
+                list.Add(RepositoryItemListReader.ReadRow(reader, tableColumns, repo));
         }
 
         string? nextCursor = null;

@@ -69,22 +69,6 @@ internal static class UserCreateValidation
 
     public static bool IsAllowedMfaMethod(string mfaMethod) => AllowedMfaMethods.Contains(mfaMethod);
 
-    public static bool IsValidEmail(string email)
-    {
-        if (string.IsNullOrWhiteSpace(email))
-            return false;
-
-        try
-        {
-            _ = new MailAddress(email.Trim());
-            return true;
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-    }
-
     public static IReadOnlyList<string> NormalizeGroupNames(IEnumerable<string>? groups)
     {
         if (groups == null)
@@ -110,18 +94,34 @@ internal static class UserCreateValidation
     public static string? FormatGroupNamesForStorage(IReadOnlyList<string> groupNames) =>
         groupNames.Count == 0 ? null : string.Join(", ", groupNames);
 
-    public static DateTime ResolveAccountExpiryDate(
+    public static bool IsValidEmail(string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return false;
+
+        try
+        {
+            _ = new MailAddress(email.Trim());
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    public static DateTime? ResolveAccountExpiryDate(
         DateTime? requestedAccountExpiryDate,
         int passwordExpiryDays,
         out string? error)
     {
         error = null;
-        var utcToday = DateTime.UtcNow.Date;
-        var minimumExpiryDate = utcToday.AddDays(passwordExpiryDays);
 
         if (requestedAccountExpiryDate == null)
-            return minimumExpiryDate;
+            return null;
 
+        var utcToday = DateTime.UtcNow.Date;
+        var minimumExpiryDate = utcToday.AddDays(passwordExpiryDays);
         var accountExpiryDate = requestedAccountExpiryDate.Value.Date;
         if (accountExpiryDate <= minimumExpiryDate)
         {

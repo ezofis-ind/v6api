@@ -22,6 +22,20 @@ public sealed record CreateRepositoryItemShareResult(
     DateTime ExpiresAtUtc,
     string ShareUrl);
 
+/// <summary>How a share invite recipient should authenticate.</summary>
+public sealed record ShareInviteAuthInfo(
+    bool UserExists,
+    /// <summary>True when recipient may set a first-time EZOFIS password.</summary>
+    bool RequiresPasswordSetup,
+    /// <summary>When set, account is locked to this provider only (<c>google</c> or <c>microsoft</c>).</summary>
+    string? RequiredSocialProvider,
+    /// <summary>
+    /// What the sign-in page may offer: <c>password_setup</c>, <c>google</c>, <c>microsoft</c>, <c>password_login</c>.
+    /// For new share guests (auth not chosen yet), all three first-time options are returned.
+    /// </summary>
+    IReadOnlyList<string> AllowedAuthMethods,
+    string? LoginType);
+
 public sealed record RepositoryItemSharePreviewDto(
     string ShareToken,
     Guid SourceTenantId,
@@ -33,6 +47,11 @@ public sealed record RepositoryItemSharePreviewDto(
     DateTime ExpiresAtUtc,
     bool RequiresLogin,
     bool RequiresPasswordSetup,
+    /// <summary>When set, account already uses this provider only.</summary>
+    string? RequiredSocialProvider,
+    /// <summary>Options to show on sign-in. New guests get password_setup + google + microsoft.</summary>
+    IReadOnlyList<string> AllowedAuthMethods,
+    string? LoginType,
     bool AutoProvisionGuest,
     Guid? WorkflowInstanceId);
 

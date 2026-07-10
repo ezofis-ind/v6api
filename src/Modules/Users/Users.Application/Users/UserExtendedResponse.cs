@@ -3,7 +3,7 @@ using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 
 namespace SaaSApp.Users.Application.Users;
 
-/// <summary>Extended user profile matching POST/PUT JSON shape.</summary>
+/// <summary>Extended user profile JSON shape aligned with POST/PUT request property names.</summary>
 public sealed class UserExtendedResponse
 {
     public Guid Id { get; set; }
@@ -18,7 +18,7 @@ public sealed class UserExtendedResponse
     [JsonPropertyName("LoginType")]
     public string? LoginType { get; set; }
 
-    public int PasswordExpiryDays { get; set; }
+    public int? PasswordExpiryDays { get; set; }
     public DateTime? AccountExpiryDate { get; set; }
     public string? ForcePasswordResetOnLogin { get; set; }
 
@@ -54,6 +54,7 @@ public sealed class UserExtendedResponse
     public string? UserType { get; set; }
     public string? IdCardPath { get; set; }
     public string? SignaturePath { get; set; }
+
     public DateTime CreatedAtUtc { get; set; }
     public Guid? CreatedBy { get; set; }
     public DateTime? ModifiedAtUtc { get; set; }

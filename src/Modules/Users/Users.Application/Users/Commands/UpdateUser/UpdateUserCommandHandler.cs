@@ -28,26 +28,15 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
     {
         var user = await _userRepository.GetByIdAsync(request.UserId, cancellationToken);
         if (user == null)
-            return new UpdateUserCommandResult(Success: false, Found: false, StatusCode: 404);
+            return new UpdateUserCommandResult(Found: false);
 
-        var tenantId = _tenantContext.TenantId
-            ?? throw new InvalidOperationException("TenantId is required to update a user.");
+        if (request.ForcePasswordResetOnLogin != null
+            && UserCreateValidation.TryParseYesNo(request.ForcePasswordResetOnLogin, out _) != true)
+            return Fail("forcePasswordResetOnLogin must be Yes or No.");
 
-        bool? forcePasswordResetOnLogin = null;
-        if (request.ForcePasswordResetOnLogin != null)
-        {
-            if (UserCreateValidation.TryParseYesNo(request.ForcePasswordResetOnLogin, out var parsedForceReset) != true)
-                return Fail("forcePasswordResetOnLogin must be Yes or No.");
-            forcePasswordResetOnLogin = parsedForceReset;
-        }
-
-        bool? twoFactorAuthentication = null;
-        if (request.MfAuthentication != null)
-        {
-            if (UserCreateValidation.TryParseYesNo(request.MfAuthentication, out var parsedMfa) != true)
-                return Fail("MFAuthentication must be Yes or No.");
-            twoFactorAuthentication = parsedMfa;
-        }
+        if (request.MfAuthentication != null
+            && UserCreateValidation.TryParseYesNo(request.MfAuthentication, out _) != true)
+            return Fail("MFAuthentication must be Yes or No.");
 
         string? loginType = null;
         if (request.LoginType != null)
@@ -57,23 +46,22 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
                 return Fail("LoginType must be one of: Password, GoogleSSO, MS Entra ID, LDAP/AD.");
         }
 
-        if (request.MfaMethods != null)
+        if (!string.IsNullOrWhiteSpace(request.MfaMethods))
         {
             var mfaMethod = request.MfaMethods.Trim();
-            if (!string.IsNullOrWhiteSpace(mfaMethod) && !UserCreateValidation.IsAllowedMfaMethod(mfaMethod))
+            if (!UserCreateValidation.IsAllowedMfaMethod(mfaMethod))
                 return Fail("MFA Methods must be one of: Email OTP, Mobile OTP, Authenticator OTP.");
         }
 
-        if (request.SecondaryEmail != null
-            && !string.IsNullOrWhiteSpace(request.SecondaryEmail)
+        if (!string.IsNullOrWhiteSpace(request.SecondaryEmail)
             && !UserCreateValidation.IsValidEmail(request.SecondaryEmail))
             return Fail("secondaryEmail is not a valid email address.");
 
-        DateTime? resolvedAccountExpiryDate = null;
+        var passwordExpiryDays = request.PasswordExpiryDays ?? user.PasswordExpiryDays;
+        DateTime? accountExpiryDate = null;
         if (request.AccountExpiryDate != null)
         {
-            var passwordExpiryDays = request.PasswordExpiryDays ?? user.PasswordExpiryDays;
-            resolvedAccountExpiryDate = UserCreateValidation.ResolveAccountExpiryDate(
+            accountExpiryDate = UserCreateValidation.ResolveAccountExpiryDate(
                 request.AccountExpiryDate,
                 passwordExpiryDays,
                 out var accountExpiryError);
@@ -81,31 +69,30 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
                 return Fail(accountExpiryError);
         }
 
+        string? email = null;
         var emailChanged = false;
-        string? updatedEmail = null;
-        if (!string.IsNullOrWhiteSpace(request.Email))
+        if (request.Email != null)
         {
-            updatedEmail = request.Email.Trim();
-            var existing = await _userRepository.GetByEmailAsync(updatedEmail, cancellationToken);
+            email = request.Email.Trim();
+            if (string.IsNullOrWhiteSpace(email))
+                return Fail("email cannot be empty.");
+
+            var existing = await _userRepository.GetByEmailAsync(email, cancellationToken);
             if (existing != null && existing.Id != user.Id)
                 return Fail("A user with this email already exists.");
-            emailChanged = !string.Equals(user.Email, updatedEmail, StringComparison.Ordinal);
-        }
 
-        var roleChanged = false;
-        string? resolvedRole = null;
-        if (request.Role != null)
-        {
-            resolvedRole = UserCreateValidation.ResolveRole(request.Role);
-            roleChanged = !string.Equals(user.Role, resolvedRole, StringComparison.Ordinal);
+            emailChanged = !string.Equals(user.Email, email, StringComparison.OrdinalIgnoreCase);
         }
 
         Guid? managerId = null;
-        var applyManagerId = false;
-        if (request.Manager != null)
+        var managerProvided = request.Manager != null;
+        if (managerProvided)
         {
-            applyManagerId = true;
-            if (!string.IsNullOrWhiteSpace(request.Manager))
+            if (string.IsNullOrWhiteSpace(request.Manager))
+            {
+                managerId = null;
+            }
+            else
             {
                 var manager = await _userRepository.FindByEmailOrDisplayNameAsync(request.Manager, cancellationToken);
                 if (manager == null)
@@ -114,59 +101,79 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
             }
         }
 
-        IReadOnlyList<string>? groupNames = null;
         string? groupNameValue = null;
+        IReadOnlyList<string> groupNames = [];
         if (request.Groups != null)
         {
             groupNames = UserCreateValidation.NormalizeGroupNames(request.Groups);
-            await _usersSchemaEnsurer.EnsureGroupsTablesAsync(cancellationToken);
+            if (groupNames.Count > 0)
+                await _usersSchemaEnsurer.EnsureGroupsTablesAsync(cancellationToken);
+
             groupNameValue = UserCreateValidation.FormatGroupNamesForStorage(groupNames);
             if (groupNameValue?.Length > UserCreateValidation.MaxGroupNameLength)
                 return Fail("Combined group names exceed 128 characters.");
         }
 
+        bool? forcePasswordResetOnLogin = null;
+        if (request.ForcePasswordResetOnLogin != null
+            && UserCreateValidation.TryParseYesNo(request.ForcePasswordResetOnLogin, out var parsedForceReset) == true)
+            forcePasswordResetOnLogin = parsedForceReset;
+
+        bool? twoFactorAuthentication = null;
+        if (request.MfAuthentication != null
+            && UserCreateValidation.TryParseYesNo(request.MfAuthentication, out var parsedMfa) == true)
+            twoFactorAuthentication = parsedMfa;
+
+        var roleChanged = false;
+        string? role = null;
+        if (request.Role != null)
+        {
+            role = request.Role.Trim();
+            roleChanged = !string.Equals(user.Role, role, StringComparison.OrdinalIgnoreCase);
+        }
+
+        user.Update(
+            displayName: request.DisplayName,
+            role: role,
+            firstName: request.FirstName,
+            lastName: request.LastName,
+            phoneNo: request.PhoneNo,
+            department: request.Department,
+            jobTitle: request.JobTitle,
+            language: request.Language,
+            countryCode: request.CountryCode,
+            avatarPath: request.AvatarPath,
+            uiPreference: request.UiPreference,
+            email: email,
+            authStrategy: request.AuthStrategy != null ? UserCreateValidation.ResolveAuthStrategy(request.AuthStrategy) : null,
+            loginName: request.UserName,
+            loginType: loginType,
+            passwordExpiryDays: request.PasswordExpiryDays,
+            accountExpiryDate: request.AccountExpiryDate != null ? accountExpiryDate : null,
+            forcePasswordResetOnLogin: forcePasswordResetOnLogin,
+            twoFactorAuthentication: twoFactorAuthentication,
+            mfaMethods: request.MfaMethods,
+            employeeId: request.EmployeeId,
+            businessUnit: request.BusinessUnit,
+            managerId: managerProvided ? managerId : null,
+            applyManagerId: managerProvided,
+            location: request.Location,
+            groupName: request.Groups != null ? groupNameValue : null,
+            applyGroupName: request.Groups != null,
+            userType: request.UserType,
+            secondaryEmail: request.SecondaryEmail,
+            idCardPath: request.IdCardPath,
+            signaturePath: request.SignaturePath,
+            modifiedBy: request.ModifiedBy);
+
         if (!string.IsNullOrWhiteSpace(request.Password))
             user.SetPasswordHash(BCrypt.Net.BCrypt.HashPassword(request.Password.Trim()));
 
-        if (emailChanged && updatedEmail != null)
-            user.SetEmail(updatedEmail);
-
-        user.Update(
-            request.DisplayName,
-            resolvedRole,
-            request.FirstName,
-            request.LastName,
-            request.PhoneNo,
-            request.Department,
-            request.JobTitle,
-            request.Language,
-            request.CountryCode,
-            request.AvatarPath,
-            request.UiPreference,
-            request.AuthStrategy != null ? UserCreateValidation.ResolveAuthStrategy(request.AuthStrategy) : null,
-            request.UserName,
-            loginType,
-            request.PasswordExpiryDays,
-            resolvedAccountExpiryDate,
-            forcePasswordResetOnLogin,
-            twoFactorAuthentication,
-            request.MfaMethods,
-            request.EmployeeId,
-            request.BusinessUnit,
-            managerId,
-            applyManagerId,
-            request.Location,
-            groupNameValue,
-            request.UserType,
-            request.SecondaryEmail,
-            request.IdCardPath,
-            request.SignaturePath,
-            request.ModifiedBy);
-
-        _userRepository.Update(user);
-
-        if (groupNames != null)
+        if (request.Groups != null)
         {
+            var tenantId = _tenantContext.TenantId
+                ?? throw new InvalidOperationException("TenantId is required to update user groups.");
+
             foreach (var groupName in groupNames)
             {
                 var group = await _groupRepository.GetByNameAsync(groupName, cancellationToken);
@@ -183,13 +190,19 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
             }
         }
 
-        var registrySyncRequired = emailChanged || roleChanged;
+        _userRepository.Update(user);
+
+        string? registryEmail = null;
+        string? registryRole = null;
+        if (emailChanged || roleChanged)
+        {
+            registryEmail = user.Email;
+            registryRole = user.Role;
+        }
+
         return new UpdateUserCommandResult(
-            Success: true,
-            StatusCode: 204,
-            RegistrySyncRequired: registrySyncRequired,
-            RegistryEmail: registrySyncRequired ? (updatedEmail ?? user.Email) : null,
-            RegistryRole: registrySyncRequired ? (resolvedRole ?? user.Role) : null);
+            RegistryEmail: registryEmail,
+            RegistryRole: registryRole);
     }
 
     private static UpdateUserCommandResult Fail(string error, int statusCode = 400) =>

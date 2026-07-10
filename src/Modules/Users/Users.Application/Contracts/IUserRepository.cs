@@ -11,6 +11,9 @@ public interface IUserRepository
     /// <summary>Get user by ID.</summary>
     Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
+    /// <summary>Get users by IDs (excluding soft-deleted).</summary>
+    Task<IReadOnlyList<User>> GetByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);
+
     /// <summary>Get user by email (case-sensitive, trimmed).</summary>
     Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default);
 
@@ -19,9 +22,6 @@ public interface IUserRepository
 
     /// <summary>List all users (excluding soft-deleted) ordered by DisplayName.</summary>
     Task<IReadOnlyList<User>> ListAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>Get users by IDs (excluding soft-deleted).</summary>
-    Task<IReadOnlyList<User>> GetByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);
 
     /// <summary>Count how many of the given user IDs exist in the current tenant.</summary>
     Task<int> CountExistingByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default);

@@ -127,7 +127,7 @@ public sealed class LoginController : ControllerBase
     }
 
     /// <summary>
-    /// Set first-time password for a workflow inbox / guest file share invite.
+    /// Set first-time password for a workflow inbox / guest file share invite (EZOFIS users only).
     /// No X-Tenant-Id required — tenant is resolved from the share token.
     /// Returns JWT on success; use shareToken on repository file APIs after login.
     /// </summary>
@@ -145,6 +145,41 @@ public sealed class LoginController : ControllerBase
                 request.ShareToken,
                 request.Email,
                 request.Password,
+                cancellationToken);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Social login (Google / Microsoft) for a workflow inbox / guest file share invite.
+    /// Call after client-side Google/Microsoft OAuth. No X-Tenant-Id — tenant from share token.
+    /// </summary>
+    [HttpPost("share/social-login")]
+    [ProducesResponseType(typeof(LoginSuccess), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> SetShareInviteSocialLogin(
+        [FromBody] SetShareInviteSocialLoginRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _authService.SetShareInviteSocialLoginAsync(
+                request.ShareToken,
+                request.Email,
+                request.Provider,
                 cancellationToken);
             return Ok(result);
         }
@@ -181,5 +216,8 @@ public record CompleteTwoFactorRequest(string TempToken, string Code);
 /// <summary>Social login: email + provider (google or microsoft). Requires X-Tenant-Id header. No password.</summary>
 public record SocialLoginRequest(string Email, string Provider);
 
-/// <summary>First-time password for guest share invite from workflow inbox.</summary>
+/// <summary>First-time password for guest share invite from workflow inbox (EZOFIS only).</summary>
 public record SetShareInvitePasswordRequest(string ShareToken, string Email, string Password);
+
+/// <summary>Social login for guest share invite after Google/Microsoft OAuth on the client.</summary>
+public record SetShareInviteSocialLoginRequest(string ShareToken, string Email, string Provider);

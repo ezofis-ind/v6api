@@ -45,6 +45,8 @@ builder.Services.AddCatalog(builder.Configuration);
 builder.Services.AddScoped<ITenantSignupService, TenantSignupService>();
 builder.Services.Configure<TenantPilotUserOptions>(
     builder.Configuration.GetSection(TenantPilotUserOptions.SectionName));
+builder.Services.Configure<TenantDefaultCreditOptions>(
+    builder.Configuration.GetSection(TenantDefaultCreditOptions.SectionName));
 builder.Services.AddScoped<IWorkflowSchemaService, WorkflowSchemaService>();
 builder.Services.AddScoped<IDmsSchemaService, DmsSchemaService>();
 builder.Services.AddHttpClient(nameof(LegacyWorkflowTransactionService));

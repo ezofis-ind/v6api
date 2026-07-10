@@ -32,13 +32,28 @@ public sealed class ApAgentJobProgressService : IApAgentJobProgressService
                 (@JobId, @TenantId, @WorkflowId, @InstanceId, N'Enqueued', N'QUEUED', N'AP Agent job queued', NULL, NULL, SYSUTCDATETIME(), SYSUTCDATETIME());
             """;
 
-        await ExecuteAsync(sql, cmd =>
+        try
         {
-            cmd.Parameters.AddWithValue("@JobId", jobId);
-            cmd.Parameters.AddWithValue("@TenantId", tenantId);
-            cmd.Parameters.AddWithValue("@WorkflowId", workflowId);
-            cmd.Parameters.AddWithValue("@InstanceId", instanceId);
-        }, cancellationToken);
+            await ExecuteAsync(sql, cmd =>
+            {
+                cmd.Parameters.AddWithValue("@JobId", jobId);
+                cmd.Parameters.AddWithValue("@TenantId", tenantId);
+                cmd.Parameters.AddWithValue("@WorkflowId", workflowId);
+                cmd.Parameters.AddWithValue("@InstanceId", instanceId);
+            }, cancellationToken);
+        }
+        catch (SqlException ex) when (ex.Number == 208)
+        {
+            TableEnsured.TryRemove(_tenantContext.ConnectionString?.Trim() ?? string.Empty, out _);
+            await EnsureTableAsync(cancellationToken, force: true);
+            await ExecuteAsync(sql, cmd =>
+            {
+                cmd.Parameters.AddWithValue("@JobId", jobId);
+                cmd.Parameters.AddWithValue("@TenantId", tenantId);
+                cmd.Parameters.AddWithValue("@WorkflowId", workflowId);
+                cmd.Parameters.AddWithValue("@InstanceId", instanceId);
+            }, cancellationToken);
+        }
     }
 
     public Task UpdateProgressAsync(
@@ -125,6 +140,9 @@ public sealed class ApAgentJobProgressService : IApAgentJobProgressService
             cmd.Parameters.AddWithValue("@ErrorMessage", (object?)errorMessage ?? DBNull.Value);
         }, cancellationToken);
     }
+
+    public Task EnsureProgressTableAsync(CancellationToken cancellationToken = default) =>
+        EnsureTableAsync(cancellationToken);
 
     public async Task<ApAgentJobProgressRow?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken = default)
     {
@@ -247,18 +265,29 @@ public sealed class ApAgentJobProgressService : IApAgentJobProgressService
         }
     }
 
-    private async Task EnsureTableAsync(CancellationToken cancellationToken)
+    private async Task EnsureTableAsync(CancellationToken cancellationToken, bool force = false)
     {
         var connectionString = _tenantContext.ConnectionString;
         if (string.IsNullOrWhiteSpace(connectionString))
             throw new InvalidOperationException("Tenant connection string not resolved.");
 
-        if (TableEnsured.ContainsKey(connectionString))
+        var cacheKey = connectionString.Trim();
+        if (!force && TableEnsured.ContainsKey(cacheKey) && await TableExistsAsync(cancellationToken))
             return;
+
+        TableEnsured.TryRemove(cacheKey, out _);
 
         const string ensureSchemaSql = """
             IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'workflow')
                 EXEC(N'CREATE SCHEMA workflow');
+            """;
+
+        const string dropLegacySql = """
+            IF OBJECT_ID(N'workflow.ApAgentJobProgress', N'U') IS NOT NULL
+               AND COL_LENGTH(N'workflow.ApAgentJobProgress', N'ProgressPercent') IS NULL
+            BEGIN
+                DROP TABLE workflow.ApAgentJobProgress;
+            END
             """;
 
         const string createTableSql = """
@@ -310,13 +339,32 @@ public sealed class ApAgentJobProgressService : IApAgentJobProgressService
             """;
 
         await using var connection = OpenConnection();
-        foreach (var batch in new[] { ensureSchemaSql, createTableSql, addFormDataColumnSql, createIndexSql })
+        foreach (var batch in new[] { ensureSchemaSql, dropLegacySql, createTableSql, addFormDataColumnSql, createIndexSql })
         {
             await using var cmd = new SqlCommand(batch, connection);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        TableEnsured.TryAdd(connectionString, 0);
+        if (!await TableExistsAsync(cancellationToken))
+            throw new InvalidOperationException("Failed to create workflow.ApAgentJobProgress table.");
+
+        TableEnsured.TryAdd(cacheKey, 0);
+    }
+
+    private async Task<bool> TableExistsAsync(CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT CASE WHEN EXISTS (
+                SELECT 1
+                FROM sys.tables t
+                INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+                WHERE s.name = N'workflow' AND t.name = N'ApAgentJobProgress'
+            ) THEN 1 ELSE 0 END;
+            """;
+
+        await using var connection = OpenConnection();
+        await using var cmd = new SqlCommand(sql, connection);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken)) == 1;
     }
 
     private SqlConnection OpenConnection()

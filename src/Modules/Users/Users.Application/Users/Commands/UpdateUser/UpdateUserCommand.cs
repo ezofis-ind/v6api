@@ -39,10 +39,9 @@ public record UpdateUserCommand(
 
 /// <summary>Result of UpdateUser.</summary>
 public record UpdateUserCommandResult(
-    bool Success,
+    bool Success = true,
     bool Found = true,
     string? Error = null,
     int StatusCode = 204,
-    bool RegistrySyncRequired = false,
     string? RegistryEmail = null,
     string? RegistryRole = null);

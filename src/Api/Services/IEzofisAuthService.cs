@@ -13,13 +13,23 @@ public interface IEzofisAuthService
     Task<LoginResult> SocialLoginAsync(string email, string provider, Guid tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// First-time password for a workflow/repository guest share invite.
+    /// First-time password for a workflow/repository guest share invite (EZOFIS users only).
     /// Validates shareToken + email, sets password, returns JWT.
     /// </summary>
     Task<LoginResult> SetShareInvitePasswordAsync(
         string shareToken,
         string email,
         string password,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Social login for a share invite (Google / Microsoft). Validates shareToken + email + provider.
+    /// No X-Tenant-Id required — tenant is resolved from the share token.
+    /// </summary>
+    Task<LoginResult> SetShareInviteSocialLoginAsync(
+        string shareToken,
+        string email,
+        string provider,
         CancellationToken cancellationToken = default);
 }
 

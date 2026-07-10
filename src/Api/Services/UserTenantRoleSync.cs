@@ -13,5 +13,5 @@ public sealed class UserTenantRoleSync : IUserTenantRoleSync
     }
 
     public Task SyncRoleForUserAsync(string email, Guid tenantId, string role, CancellationToken cancellationToken = default) =>
-        _userTenantRegistry.AddOrUpdateAsync(email, tenantId, role, cancellationToken);
+        _userTenantRegistry.AddOrUpdateAsync(email, tenantId, role, cancellationToken: cancellationToken);
 }

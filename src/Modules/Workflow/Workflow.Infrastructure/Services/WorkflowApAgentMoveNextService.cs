@@ -20,15 +20,25 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
         {
             ["InvoiceNo"] = "InvoiceNumber",
             ["Invoice No"] = "InvoiceNumber",
+            ["Invoice Number"] = "InvoiceNumber",
             ["PONumber"] = "PoNumber",
             ["PO Number"] = "PoNumber",
+            ["PO No"] = "PoNumber",
+            ["PONumber"] = "PoNumber",
             ["InvoiceDate"] = "DocumentDate",
             ["Invoice Date"] = "DocumentDate",
+            ["PODate"] = "PoDate",
+            ["PO Date"] = "PoDate",
+            ["PO DATE"] = "PoDate",
             ["VendorName"] = "Supplier",
             ["Vendor Name"] = "Supplier",
+            ["Vendor"] = "Supplier",
             ["InvoiceAmount"] = "Amount",
             ["Invoice Amount"] = "Amount",
+            ["POAmount"] = "PoAmount",
+            ["PO Amount"] = "PoAmount",
             ["Invoice Tax Amount"] = "InvoiceTaxAmount",
+            ["InvoiceTaxAmount"] = "InvoiceTaxAmount",
             ["currency"] = "Currency",
             ["Matter ID"] = "MatterId",
             ["GL Account"] = "GlAccount",
@@ -36,7 +46,20 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
             ["Cost Center"] = "CostCenter",
             ["Matched Status"] = "MatchedStatus",
             ["TERMS"] = "Terms",
-            ["PO Amount"] = "PoAmount",
+            ["Terms"] = "Terms",
+            ["Buyer Name"] = "Buyer",
+            ["Supplier Address"] = "SupplierAddress",
+            ["Vendor Address"] = "SupplierAddress",
+            ["VendorAddress"] = "SupplierAddress",
+            ["Ship To Address"] = "ShipToAddress",
+            ["Ship-To Address"] = "ShipToAddress",
+            ["ShipToAddress"] = "ShipToAddress",
+            ["Pay To Address"] = "PayToAddress",
+            ["Pay-To Address"] = "PayToAddress",
+            ["PayToAddress"] = "PayToAddress",
+            ["Document Type"] = "DocumentType",
+            ["DocumentType"] = "DocumentType",
+            ["decision"] = "MatchedStatus",
             ["Gross Amount"] = "Gross Amount",
         };
 
@@ -397,8 +420,7 @@ ORDER BY CreatedAt DESC, Id DESC;";
         try
         {
             using var doc = JsonDocument.Parse(agentResponseJson);
-            if (!doc.RootElement.TryGetProperty("po_row", out var poRow)
-                || poRow.ValueKind != JsonValueKind.Object)
+            if (!TryGetPoRowObject(doc.RootElement, out var poRow))
             {
                 return fields;
             }
@@ -432,6 +454,33 @@ ORDER BY CreatedAt DESC, Id DESC;";
         }
 
         return fields;
+    }
+
+    private static bool TryGetPoRowObject(JsonElement root, out JsonElement poRow)
+    {
+        poRow = default;
+        if (root.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (root.TryGetProperty("po_row", out poRow) && poRow.ValueKind == JsonValueKind.Object)
+            return true;
+
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (!string.Equals(prop.Name, "AIAGENTResponse", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (prop.Value.ValueKind == JsonValueKind.Object
+                && prop.Value.TryGetProperty("po_row", out poRow)
+                && poRow.ValueKind == JsonValueKind.Object)
+            {
+                return true;
+            }
+
+            break;
+        }
+
+        return false;
     }
 
     private async Task<int> ApplyPoRowFieldsToEzfbAsync(
@@ -720,9 +769,168 @@ ORDER BY CreatedAt DESC, Id DESC;";
         int? legacyTransactionId,
         CancellationToken cancellationToken = default)
     {
-        await BindEzfbFromRepositoryAsync(tenantId, payload, cancellationToken);
         await SaveAgentValidationAsync(
             workflowId, workflowInstanceId, apAgentStep, userId, payload, legacyTransactionId, cancellationToken);
+        await TryApplyRepositoryFieldsFromAgentResponseAsync(
+            workflowId,
+            workflowInstanceId,
+            tenantId,
+            userId,
+            payload,
+            cancellationToken);
+        await BindEzfbFromRepositoryAsync(tenantId, payload, cancellationToken);
+        await TryApplyDecisionToMatchedStatusFormAsync(tenantId, payload, cancellationToken);
+    }
+
+    /// <summary>Writes AIAGENTResponse.decision to the form Matched Status control (jsonId column). Does not touch po_row sync.</summary>
+    private async Task TryApplyDecisionToMatchedStatusFormAsync(
+        Guid tenantId,
+        MoveToNextStepApAgentPayload payload,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(payload.AiAgentResponseJson)
+            || string.IsNullOrWhiteSpace(payload.FormId)
+            || !payload.FormEntryId.HasValue)
+        {
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(payload.AiAgentResponseJson);
+            if (!TryGetAgentResponseRoot(doc.RootElement, out var root))
+                return;
+
+            if (!root.TryGetProperty("decision", out var decisionProp))
+                return;
+
+            var decision = JsonElementToString(decisionProp);
+            if (IsEmptyValue(decision))
+                return;
+
+            var connectionString = _tenantContext.ConnectionString;
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return;
+
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+
+            var formId = FormIdNaming.NormalizeFormId(payload.FormId);
+            var wFormIdValue = await ResolveWFormIdParameterAsync(connection, formId, cancellationToken);
+            var controls = await LoadFormControlsAsync(connection, wFormIdValue, cancellationToken);
+            if (controls.Count == 0)
+                return;
+
+            var tableSuffix = FormIdNaming.GetEzfbTableSuffix(formId);
+            var ezfbTable = $"dbo.[ezfb_{tableSuffix}_items]";
+            var ezfbColumns = await LoadTableColumnsAsync(connection, "dbo", $"ezfb_{tableSuffix}_items", cancellationToken);
+            if (ezfbColumns.Count == 0)
+                return;
+
+            if (!TryResolveControlForField("Matched Status", controls, out var control) || control is null)
+            {
+                _logger.LogDebug(
+                    "No wFormControl match for Matched Status on form {FormId}, entry {FormEntryId}.",
+                    payload.FormId,
+                    payload.FormEntryId.Value);
+                return;
+            }
+
+            if (!TryResolveEzfbColumn(control.JsonId, ezfbColumns, out var column))
+            {
+                _logger.LogWarning(
+                    "ezfb column not found for Matched Status jsonId {JsonId} on form {FormId}.",
+                    control.JsonId,
+                    payload.FormId);
+                return;
+            }
+
+            await UpdateEzfbColumnAsync(
+                connection,
+                ezfbTable,
+                payload.FormEntryId.Value,
+                column,
+                decision!,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Matched Status form update from decision failed for form {FormId} entry {FormEntryId}.",
+                payload.FormId,
+                payload.FormEntryId);
+        }
+    }
+
+    private async Task TryApplyRepositoryFieldsFromAgentResponseAsync(
+        Guid workflowId,
+        Guid workflowInstanceId,
+        Guid tenantId,
+        Guid userId,
+        MoveToNextStepApAgentPayload payload,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(payload.AiAgentResponseJson)
+            || !payload.RepositoryId.HasValue
+            || !payload.RepositoryItemId.HasValue)
+        {
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(payload.AiAgentResponseJson);
+            if (!TryGetAgentResponseRoot(doc.RootElement, out var root))
+                return;
+
+            Dictionary<string, string> fields;
+            try
+            {
+                var (parsedFields, _) = ApAgentMetadataParser.ParseFieldsPayload(root);
+                fields = new Dictionary<string, string>(parsedFields, StringComparer.OrdinalIgnoreCase);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "AIAGENTResponse field parse failed for repository sync on instance {InstanceId}; using po_row fallback.",
+                    workflowInstanceId);
+                fields = new Dictionary<string, string>(ExtractPoRowFields(payload.AiAgentResponseJson), StringComparer.OrdinalIgnoreCase);
+            }
+
+            if (root.TryGetProperty("decision", out var decisionProp)
+                && !IsEmptyValue(JsonElementToString(decisionProp)))
+            {
+                fields["Matched Status"] = JsonElementToString(decisionProp)!;
+            }
+
+            EnrichInvoiceFieldsFromAgentResponse(root, fields);
+            EnsureApInvoiceDocumentType(fields);
+
+            if (fields.Count == 0)
+                return;
+
+            await _repositoryItems.UpdateItemMetadataAsync(
+                payload.RepositoryId.Value,
+                tenantId,
+                payload.RepositoryItemId.Value,
+                fields,
+                userId,
+                cancellationToken);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "AIAGENTResponse is not valid JSON for repository sync on instance {InstanceId}.", workflowInstanceId);
+        }
+        catch (ArgumentException ex) when (ex.Message.Contains("No valid metadata fields", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(ex, "Repository field sync skipped for instance {InstanceId}: no matching repository columns.", workflowInstanceId);
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            _logger.LogWarning(ex, "AIAGENTResponse repository sync failed for instance {InstanceId}.", workflowInstanceId);
+        }
     }
 
     private async Task InsertAgentValidationAsync(
@@ -891,6 +1099,9 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
 
             foreach (var prop in doc.RootElement.EnumerateObject())
             {
+                if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                    continue;
+
                 dict[prop.Name] = prop.Value.ValueKind switch
                 {
                     JsonValueKind.String => prop.Value.GetString(),
@@ -898,13 +1109,13 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
                     JsonValueKind.True => "true",
                     JsonValueKind.False => "false",
                     JsonValueKind.Null => null,
-                    _ => prop.Value.GetRawText()
+                    _ => null
                 };
             }
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            throw new InvalidOperationException("AIAGENTResponse is not valid JSON.", ex);
+            // Invalid agent JSON must not block move-next.
         }
 
         return dict;
@@ -966,7 +1177,25 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
             return TryMatchControlByKeyOrJsonId(alias, controls, out control);
         }
 
+        foreach (var reverseAlias in GetReverseAliasCandidates(key))
+        {
+            if (TryMatchControlByKeyOrJsonId(reverseAlias, controls, out control))
+                return true;
+        }
+
         return false;
+    }
+
+    private static IEnumerable<string> GetReverseAliasCandidates(string key)
+    {
+        foreach (var (aliasKey, canonical) in RepositoryFieldAliases)
+        {
+            if (string.Equals(canonical, key, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(aliasKey, key, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return aliasKey;
+            }
+        }
     }
 
     private static bool TryMatchControlByKeyOrJsonId(
@@ -1070,6 +1299,7 @@ WHERE Id = @ItemId AND TenantId = @TenantId AND RepositoryId = @RepositoryId AND
     {
         var dict = new Dictionary<string, string>(fields, StringComparer.OrdinalIgnoreCase);
         CollapseRepositoryFieldAliases(dict);
+        EnsureApInvoiceDocumentType(dict);
         if (string.IsNullOrWhiteSpace(lineItemsJson))
             return dict;
 
@@ -1142,6 +1372,132 @@ SELECT CAST(@@ROWCOUNT AS int);";
                 itemId,
                 column);
         }
+    }
+
+    private static void EnrichInvoiceFieldsFromAgentResponse(JsonElement root, Dictionary<string, string> fields)
+    {
+        if (!HasValue(fields, "InvoiceNo", "Invoice No", "InvoiceNumber")
+            && TryGetNestedString(root, out var invoiceNo, "Extracted Invoice JSON", "invoice_header", "Invoice No"))
+        {
+            fields["InvoiceNo"] = invoiceNo!;
+            fields["Invoice No"] = invoiceNo!;
+        }
+
+        if (!HasValue(fields, "InvoiceAmount", "Invoice Amount", "Amount")
+            && TryGetNestedString(root, out var invoiceAmount, "Extracted Invoice JSON", "invoice_header", "Invoice Amount"))
+        {
+            fields["InvoiceAmount"] = invoiceAmount!;
+            fields["Invoice Amount"] = invoiceAmount!;
+        }
+
+        if (!HasValue(fields, "InvoiceDate", "Invoice Date", "DocumentDate"))
+        {
+            if (TryGetNestedString(root, out var invoiceDate, "Extracted Invoice JSON", "invoice_header", "Invoice Date")
+                && !IsEmptyValue(invoiceDate))
+            {
+                fields["InvoiceDate"] = invoiceDate!;
+                fields["Invoice Date"] = invoiceDate!;
+            }
+            else if (root.TryGetProperty("payment_terms", out var terms)
+                && terms.ValueKind == JsonValueKind.Object
+                && terms.TryGetProperty("invoice_date", out var invDateProp))
+            {
+                var invoiceDateFromTerms = JsonElementToString(invDateProp);
+                if (!IsEmptyValue(invoiceDateFromTerms))
+                    fields["InvoiceDate"] = invoiceDateFromTerms!;
+            }
+        }
+    }
+
+    private static bool HasValue(IReadOnlyDictionary<string, string> fields, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (fields.TryGetValue(key, out var value) && !IsEmptyValue(value))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetNestedString(
+        JsonElement root,
+        out string? value,
+        params string[] path)
+    {
+        value = null;
+        if (path.Length == 0)
+            return false;
+
+        var current = root;
+        foreach (var segment in path)
+        {
+            if (!TryGetPropertyIgnoreCase(current, segment, out current))
+                return false;
+        }
+
+        value = JsonElementToString(current);
+        return !IsEmptyValue(value);
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement obj, string name, out JsonElement value)
+    {
+        foreach (var prop in obj.EnumerateObject())
+        {
+            if (!string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            value = prop.Value;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool TryGetAgentResponseRoot(JsonElement element, out JsonElement root)
+    {
+        root = element;
+        if (element.ValueKind != JsonValueKind.Object)
+            return false;
+
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (!string.Equals(prop.Name, "AIAGENTResponse", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (prop.Value.ValueKind == JsonValueKind.Object)
+            {
+                root = prop.Value;
+                return true;
+            }
+
+            break;
+        }
+
+        return true;
+    }
+
+    private static string? JsonElementToString(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.String => element.GetString(),
+        JsonValueKind.Number => element.GetRawText(),
+        JsonValueKind.True => "true",
+        JsonValueKind.False => "false",
+        JsonValueKind.Null => null,
+        _ => element.GetRawText()
+    };
+
+    /// <summary>AP invoice workflows: agent payloads often omit document type; default repository column to INVOICE.</summary>
+    private static void EnsureApInvoiceDocumentType(Dictionary<string, string> fields)
+    {
+        if (fields.TryGetValue("DocumentType", out var existing) && !IsEmptyValue(existing))
+            return;
+        if (fields.TryGetValue("Document Type", out existing) && !IsEmptyValue(existing))
+            return;
+
+        fields.Remove("Document Type");
+        fields["DocumentType"] = "INVOICE";
     }
 
     private static bool IsEmptyValue(string? value) =>

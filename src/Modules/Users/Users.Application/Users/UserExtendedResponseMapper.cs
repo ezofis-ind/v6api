@@ -3,11 +3,10 @@ using SaaSApp.Users.Domain.Entities;
 
 namespace SaaSApp.Users.Application.Users;
 
-public static class UserExtendedResponseMapper
+internal static class UserExtendedResponseMapper
 {
-    public static UserExtendedResponse Map(User user, string? managerEmail = null)
-    {
-        return new UserExtendedResponse
+    public static UserExtendedResponse Map(User user, string? managerEmail = null) =>
+        new()
         {
             Id = user.Id,
             Email = user.Email,
@@ -27,7 +26,7 @@ public static class UserExtendedResponseMapper
             BusinessUnit = user.BusinessUnit,
             Manager = managerEmail,
             Location = user.Location,
-            Group = ParseGroupNames(user.GroupName),
+            Group = ParseGroups(user.GroupName),
             MfAuthentication = ToYesNo(user.TwoFactorAuthentication),
             MfaMethods = user.MfaMethods,
             PhoneNo = user.PhoneNo,
@@ -44,7 +43,6 @@ public static class UserExtendedResponseMapper
             ModifiedAtUtc = user.ModifiedAtUtc,
             ModifiedBy = user.ModifiedBy
         };
-    }
 
     public static UserExtendedResponse MapWithPermissions(
         User user,
@@ -58,14 +56,14 @@ public static class UserExtendedResponseMapper
         return response;
     }
 
-    private static string ToYesNo(bool value) => value ? "Yes" : "No";
-
-    private static string[]? ParseGroupNames(string? groupName)
+    public static string[]? ParseGroups(string? groupName)
     {
         if (string.IsNullOrWhiteSpace(groupName))
             return null;
 
         return groupName
-            .Split(", ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            .Split(", ", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
     }
+
+    private static string ToYesNo(bool value) => value ? "Yes" : "No";
 }

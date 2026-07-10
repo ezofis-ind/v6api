@@ -59,6 +59,7 @@ public sealed class UsersController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateUserRequest request, CancellationToken cancellationToken)
     {
         var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
+        var createdBy = GetCurrentUserId();
         var command = new CreateUserCommand(
             request.Email,
             request.DisplayName,
@@ -90,12 +91,17 @@ public sealed class UsersController : ControllerBase
             request.UserType,
             request.IdCardPath,
             request.SignaturePath,
-            GetCurrentUserId());
+            createdBy);
         var result = await _mediator.Send(command, cancellationToken);
         if (!result.Success)
             return StatusCode(result.StatusCode, new { error = result.Error });
 
-        await _userTenantRegistry.AddOrUpdateAsync(request.Email.Trim(), tenantId, result.RoleName ?? SaaSApp.Users.Domain.Entities.User.RoleTenantUser, cancellationToken);
+        await _userTenantRegistry.AddOrUpdateAsync(
+            request.Email.Trim(),
+            tenantId,
+            result.RoleName ?? SaaSApp.Users.Domain.Entities.User.RoleTenantUser,
+            result.UserId,
+            cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = result.UserId }, new { userId = result.UserId });
     }
 
@@ -386,6 +392,68 @@ public sealed class UsersController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>Get onboarding pre-questions saved for a user in catalog.UserTenants.</summary>
+    [HttpGet("{userId:guid}/pre-questions")]
+    [ProducesResponseType(typeof(UserPreQuestionsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetPreQuestions(Guid userId, CancellationToken cancellationToken)
+    {
+        if (!CanAccessUserProfile(userId))
+            return Forbid();
+
+        var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
+        var user = await _mediator.Send(new GetUserByIdQuery(userId), cancellationToken);
+        if (user == null)
+            return NotFound(new { error = "User not found in this tenant." });
+
+        var result = await _userTenantRegistry.GetPreQuestionsAsync(userId, tenantId, user.Email, cancellationToken);
+        if (result == null)
+            return NotFound(new { error = "User tenant membership not found in catalog." });
+
+        return Ok(result);
+    }
+
+    /// <summary>Save onboarding pre-questions and answers as JSON in catalog.UserTenants for the user.</summary>
+    [HttpPut("{userId:guid}/pre-questions")]
+    [ProducesResponseType(typeof(UserPreQuestionsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdatePreQuestions(
+        Guid userId,
+        [FromBody] UpdateUserPreQuestionsRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!CanAccessUserProfile(userId))
+            return Forbid();
+
+        var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
+        var user = await _mediator.Send(new GetUserByIdQuery(userId), cancellationToken);
+        if (user == null)
+            return NotFound(new { error = "User not found in this tenant." });
+
+        try
+        {
+            var updated = await _userTenantRegistry.UpdatePreQuestionsAsync(
+                userId,
+                tenantId,
+                user.Email,
+                request.Questions ?? [],
+                cancellationToken);
+
+            if (!updated)
+                return NotFound(new { error = "User tenant membership could not be updated in catalog." });
+
+            var result = await _userTenantRegistry.GetPreQuestionsAsync(userId, tenantId, user.Email, cancellationToken);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     /// <summary>Get a user by ID in the current tenant. Includes permissionCount and permissionKeys grouped by category.</summary>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(UserExtendedResponse), StatusCodes.Status200OK)]
@@ -406,7 +474,8 @@ public sealed class UsersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserRequest request, CancellationToken cancellationToken)
     {
-        var command = new UpdateUserCommand(
+        var modifiedBy = GetCurrentUserId();
+        var result = await _mediator.Send(new UpdateUserCommand(
             id,
             request.Email,
             request.DisplayName,
@@ -438,22 +507,17 @@ public sealed class UsersController : ControllerBase
             request.UserType,
             request.IdCardPath,
             request.SignaturePath,
-            GetCurrentUserId());
+            modifiedBy), cancellationToken);
 
-        var result = await _mediator.Send(command, cancellationToken);
-        if (!result.Found)
-            return NotFound();
         if (!result.Success)
             return StatusCode(result.StatusCode, new { error = result.Error });
+        if (!result.Found)
+            return NotFound();
 
-        if (result.RegistrySyncRequired && result.RegistryEmail != null)
+        if (result.RegistryEmail != null && result.RegistryRole != null)
         {
             var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
-            await _userTenantRegistry.AddOrUpdateAsync(
-                result.RegistryEmail.Trim(),
-                tenantId,
-                result.RegistryRole ?? SaaSApp.Users.Domain.Entities.User.RoleTenantUser,
-                cancellationToken);
+            await _userTenantRegistry.AddOrUpdateAsync(result.RegistryEmail, tenantId, result.RegistryRole, id, cancellationToken);
         }
 
         return NoContent();
@@ -480,6 +544,16 @@ public sealed class UsersController : ControllerBase
             ?? user.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? user.FindFirstValue("userId");
         return Guid.TryParse(sub, out var id) ? id : null;
+    }
+
+    private bool CanAccessUserProfile(Guid userId)
+    {
+        var currentUserId = GetCurrentUserId();
+        if (currentUserId == userId)
+            return true;
+
+        return User.IsInRole(SaaSApp.Users.Domain.Entities.User.RoleAdmin)
+            || User.HasClaim(ClaimTypes.Role, SaaSApp.Users.Domain.Entities.User.RoleAdmin);
     }
 }
 
@@ -622,3 +696,6 @@ public record CreateMenuResponse(Guid MenuId, string Key, string Label);
 
 /// <summary>Request to assign menus to a role and set default landing page.</summary>
 public record SetRoleMenusRequest(IReadOnlyList<Guid> Menus, Guid? DefaultLandingMenuId = null);
+
+/// <summary>Onboarding pre-questions to store in catalog.UserTenants.PreQuestionsJson.</summary>
+public record UpdateUserPreQuestionsRequest(IReadOnlyList<PreQuestionAnswerDto> Questions);

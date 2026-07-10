@@ -8,15 +8,18 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
     private readonly IWorkflowRepository _workflowRepository;
     private readonly IDynamicTableRepository _dynamicTableRepository;
     private readonly IWorkflowProcessAddonService _processAddon;
+    private readonly IUserEmailLookup _userEmails;
 
     public GetInstanceAttachmentsQueryHandler(
         IWorkflowRepository workflowRepository,
         IDynamicTableRepository dynamicTableRepository,
-        IWorkflowProcessAddonService processAddon)
+        IWorkflowProcessAddonService processAddon,
+        IUserEmailLookup userEmails)
     {
         _workflowRepository = workflowRepository;
         _dynamicTableRepository = dynamicTableRepository;
         _processAddon = processAddon;
+        _userEmails = userEmails;
     }
 
     public async Task<GetInstanceAttachmentsQueryResult> Handle(GetInstanceAttachmentsQuery request, CancellationToken cancellationToken)
@@ -27,6 +30,11 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
         var workflow = await _workflowRepository.GetByIdAsync(request.WorkflowId, cancellationToken);
         var attachments = await _dynamicTableRepository.GetAttachmentsAsync(request.WorkflowId, request.InstanceId, cancellationToken);
         var workflowRepositoryGuid = TryParseRepositoryGuid(workflow?.RepositoryId);
+        var uploaderEmails = await _userEmails.GetEmailsAsync(
+            attachments.Select(a => a.CreatedBy).Concat(
+                (await _processAddon.ListByProcessAsync(request.WorkflowId, request.InstanceId, cancellationToken))
+                .Select(a => a.CreatedBy)),
+            cancellationToken);
 
         var attachmentItems = attachments.Select(a => new AttachmentItem(
             a.Id,
@@ -38,6 +46,7 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
             a.ContentType,
             a.CreatedAtUtc,
             a.CreatedBy,
+            uploaderEmails.GetValueOrDefault(a.CreatedBy),
             a.ModifiedBy,
             a.ModifiedAtUtc,
             RepositoryId: a.RepositoryId ?? workflowRepositoryGuid,
@@ -64,6 +73,7 @@ public sealed class GetInstanceAttachmentsQueryHandler : IRequestHandler<GetInst
                 ContentType: null,
                 CreatedAtUtc: addon.CreatedAt,
                 CreatedBy: addon.CreatedBy,
+                UploadedBy: uploaderEmails.GetValueOrDefault(addon.CreatedBy),
                 ModifiedBy: null,
                 ModifiedAtUtc: null,
                 RepositoryId: addon.RepositoryId,
