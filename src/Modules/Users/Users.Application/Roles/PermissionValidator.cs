@@ -21,10 +21,7 @@ public sealed class PermissionValidator : IPermissionValidator
 
         foreach (var key in permissionKeys)
         {
-            if (!PermissionKeyHelper.TryParse(key, out var categoryKey, out var actionKey))
-                return key;
-
-            if (!PermissionActions.IsValid(actionKey))
+            if (!PermissionKeyHelper.TryParse(key, out var categoryKey, out _))
                 return key;
 
             if (!activeCategoryKeys.Contains(categoryKey))

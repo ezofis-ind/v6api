@@ -3,7 +3,7 @@ using SaaSApp.SharedKernel.Domain;
 namespace SaaSApp.Users.Domain.Entities;
 
 /// <summary>
-/// System-defined permission category (matrix row). Managed via DB seed/migrations, not by customers.
+/// Permission category (matrix row). Seeded defaults plus categories created at runtime when roles are assigned.
 /// </summary>
 public sealed class PermissionCategory : Entity<Guid>
 {
@@ -22,4 +22,8 @@ public sealed class PermissionCategory : Entity<Guid>
         SortOrder = sortOrder;
         IsActive = isActive;
     }
+
+    /// <summary>Create a new permission category for runtime provisioning.</summary>
+    public static PermissionCategory Create(string key, string name, int sortOrder) =>
+        new(Guid.NewGuid(), key, name, sortOrder);
 }

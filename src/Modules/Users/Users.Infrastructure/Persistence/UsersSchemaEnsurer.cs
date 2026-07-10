@@ -122,37 +122,45 @@ public static class UsersSchemaEnsurer
             CREATE UNIQUE INDEX [IX_PermissionCategories_Key] ON [users].[PermissionCategories] ([Key]);
         END
 
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'dashboard')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000001', N'dashboard', N'Dashboard', 1, 1);
+        DELETE FROM [users].[PermissionCategories]
+        WHERE [Id] IN (
+            'a1000001-0000-4000-8000-000000000007',
+            'a1000001-0000-4000-8000-000000000008');
 
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'invoices')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000002', N'invoices', N'Invoices', 2, 1);
+        DELETE FROM [users].[PermissionCategories]
+        WHERE [Key] IN (
+            N'invoices',
+            N'ocr-document-processing',
+            N'workflow-approvals',
+            N'reports-analytics',
+            N'user-management',
+            N'integrations',
+            N'system-settings')
+           OR ([Key] = N'dashboard' AND [Id] = 'a1000001-0000-4000-8000-000000000001');
 
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'ocr-document-processing')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000003', N'ocr-document-processing', N'OCR / Document Processing', 3, 1);
-
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'workflow-approvals')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000004', N'workflow-approvals', N'Workflow & Approvals', 4, 1);
-
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'reports-analytics')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000005', N'reports-analytics', N'Reports & Analytics', 5, 1);
-
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'user-management')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000006', N'user-management', N'User Management', 6, 1);
-
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'integrations')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000007', N'integrations', N'Integrations', 7, 1);
-
-        IF NOT EXISTS (SELECT 1 FROM [users].[PermissionCategories] WHERE [Key] = N'system-settings')
-            INSERT INTO [users].[PermissionCategories] ([Id], [Key], [Name], [SortOrder], [IsActive])
-            VALUES ('a1000001-0000-4000-8000-000000000008', N'system-settings', N'System Settings', 8, 1);
+        MERGE [users].[PermissionCategories] AS target
+        USING (VALUES
+            ('a1000001-0000-4000-8000-000000000006', N'dashboard', N'Dashboard', 1),
+            ('a1000001-0000-4000-8000-000000000001', N'workflow', N'Workflow', 2),
+            ('a1000001-0000-4000-8000-000000000002', N'folder', N'Folder', 3),
+            ('a1000001-0000-4000-8000-000000000003', N'task', N'Task', 4),
+            ('a1000001-0000-4000-8000-000000000004', N'workspace', N'Workspace', 5),
+            ('a1000001-0000-4000-8000-000000000005', N'settings', N'Settings', 6)
+        ) AS source ([Id], [Key], [Name], [SortOrder])
+        ON target.[Id] = source.[Id]
+        WHEN MATCHED AND (
+            target.[Key] <> source.[Key]
+            OR target.[Name] <> source.[Name]
+            OR target.[SortOrder] <> source.[SortOrder]
+            OR target.[IsActive] <> 1)
+        THEN UPDATE SET
+            target.[Key] = source.[Key],
+            target.[Name] = source.[Name],
+            target.[SortOrder] = source.[SortOrder],
+            target.[IsActive] = 1
+        WHEN NOT MATCHED BY TARGET THEN
+            INSERT ([Id], [Key], [Name], [SortOrder], [IsActive])
+            VALUES (source.[Id], source.[Key], source.[Name], source.[SortOrder], 1);
         """;
 
     public static async Task EnsurePermissionCategoriesAsync(
