@@ -517,7 +517,7 @@ public sealed class UsersController : ControllerBase
         if (result.RegistryEmail != null && result.RegistryRole != null)
         {
             var tenantId = _tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context is required.");
-            await _userTenantRegistry.AddOrUpdateAsync(result.RegistryEmail, tenantId, result.RegistryRole, cancellationToken);
+            await _userTenantRegistry.AddOrUpdateAsync(result.RegistryEmail, tenantId, result.RegistryRole, id, cancellationToken);
         }
 
         return NoContent();
