@@ -1,3 +1,4 @@
+using System.Net.Mail;
 using SaaSApp.Users.Domain.Entities;
 
 namespace SaaSApp.Users.Application.Users.Commands.CreateUser;
@@ -67,6 +68,22 @@ internal static class UserCreateValidation
     public static bool IsAllowedLoginType(string loginType) => AllowedLoginTypes.Contains(loginType);
 
     public static bool IsAllowedMfaMethod(string mfaMethod) => AllowedMfaMethods.Contains(mfaMethod);
+
+    public static bool IsValidEmail(string email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return false;
+
+        try
+        {
+            _ = new MailAddress(email.Trim());
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 
     public static IReadOnlyList<string> NormalizeGroupNames(IEnumerable<string>? groups)
     {

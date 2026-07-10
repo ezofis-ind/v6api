@@ -1,9 +1,10 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
+using SaaSApp.Users.Application.Users;
 
 namespace SaaSApp.Users.Application.Users.Queries.GetUserById;
 
-public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, GetUserByIdQueryResult?>
+public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, UserExtendedResponse?>
 {
     private readonly IUserRepository _userRepository;
     private readonly IRoleRepository _roleRepository;
@@ -19,11 +20,13 @@ public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, 
         _categoryRepository = categoryRepository;
     }
 
-    public async Task<GetUserByIdQueryResult?> Handle(GetUserByIdQuery request, CancellationToken cancellationToken)
+    public async Task<UserExtendedResponse?> Handle(GetUserByIdQuery request, CancellationToken cancellationToken)
     {
         var user = await _userRepository.GetByIdAsync(request.UserId, cancellationToken);
         if (user == null)
             return null;
+
+        var managerEmail = await ResolveManagerEmailAsync(user.ManagerId, cancellationToken);
 
         var permissionKeys = await _roleRepository.ListPermissionKeysForUserAsync(
             request.UserId,
@@ -34,23 +37,19 @@ public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, 
             _categoryRepository,
             cancellationToken);
 
-        return new GetUserByIdQueryResult(
-            user.Id,
-            user.Email,
-            user.DisplayName,
-            user.Role,
-            user.CreatedAtUtc,
-            user.FirstName,
-            user.LastName,
-            user.PhoneNo,
-            user.AuthStrategy,
-            user.Department,
-            user.JobTitle,
-            user.Language,
-            user.CountryCode,
-            user.AvatarPath,
-            user.UiPreference,
+        return UserExtendedResponseMapper.MapWithPermissions(
+            user,
+            managerEmail,
             permissionCount,
             groupedPermissions);
+    }
+
+    private async Task<string?> ResolveManagerEmailAsync(Guid? managerId, CancellationToken cancellationToken)
+    {
+        if (managerId == null)
+            return null;
+
+        var manager = await _userRepository.GetByIdAsync(managerId.Value, cancellationToken);
+        return manager?.Email;
     }
 }

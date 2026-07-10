@@ -1,6 +1,6 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
-using SaaSApp.Users.Domain;
+using SaaSApp.Users.Application.Roles;
 using SaaSApp.Users.Domain.Entities;
 
 namespace SaaSApp.Users.Application.Roles.Commands.CreateRole;
@@ -9,18 +9,18 @@ public sealed class CreateRoleCommandHandler : IRequestHandler<CreateRoleCommand
 {
     private readonly IRoleRepository _roleRepository;
     private readonly IUserRepository _userRepository;
-    private readonly IPermissionValidator _permissionValidator;
+    private readonly IPermissionCategoryRepository _categoryRepository;
     private readonly ITenantContext _tenantContext;
 
     public CreateRoleCommandHandler(
         IRoleRepository roleRepository,
         IUserRepository userRepository,
-        IPermissionValidator permissionValidator,
+        IPermissionCategoryRepository categoryRepository,
         ITenantContext tenantContext)
     {
         _roleRepository = roleRepository;
         _userRepository = userRepository;
-        _permissionValidator = permissionValidator;
+        _categoryRepository = categoryRepository;
         _tenantContext = tenantContext;
     }
 
@@ -44,11 +44,15 @@ public sealed class CreateRoleCommandHandler : IRequestHandler<CreateRoleCommand
         if (existingUserCount != userIds.Count)
             return Fail("One or more users were not found in this tenant.", 404);
 
-        var permissionKeys = PermissionKeyHelper.NormalizeKeys(request.PermissionKeys ?? []);
-        if (permissionKeys.Count == 0)
+        if (request.PermissionKeys == null || request.PermissionKeys.Count == 0)
             return Fail("At least one permission is required.");
 
-        var invalidPermission = await _permissionValidator.GetFirstInvalidKeyAsync(permissionKeys, cancellationToken);
+        var (permissionKeys, invalidPermission) = await PermissionKeyProvisioning.PrepareAsync(
+            request.PermissionKeys,
+            _categoryRepository,
+            cancellationToken);
+        if (permissionKeys.Count == 0)
+            return Fail("At least one permission is required.");
         if (invalidPermission != null)
             return Fail($"Invalid permission key: '{invalidPermission}'.");
 

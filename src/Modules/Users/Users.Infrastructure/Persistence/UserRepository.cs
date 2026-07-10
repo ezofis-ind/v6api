@@ -56,6 +56,17 @@ public sealed class UserRepository : IUserRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<User>> GetByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+            return [];
+
+        return await _context.Users
+            .AsNoTracking()
+            .Where(u => ids.Contains(u.Id))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<int> CountExistingByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken = default)
     {
         if (ids.Count == 0)

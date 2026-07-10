@@ -72,6 +72,10 @@ public sealed class CreateUserCommandHandler : IRequestHandler<CreateUserCommand
         if (loginType == UserCreateValidation.LoginTypePassword && string.IsNullOrWhiteSpace(request.Password))
             return Fail("password is required when LoginType is Password.");
 
+        if (!string.IsNullOrWhiteSpace(request.SecondaryEmail)
+            && !UserCreateValidation.IsValidEmail(request.SecondaryEmail))
+            return Fail("secondaryEmail is not a valid email address.");
+
         Guid? managerId = null;
         if (!string.IsNullOrWhiteSpace(request.Manager))
         {
@@ -106,7 +110,17 @@ public sealed class CreateUserCommandHandler : IRequestHandler<CreateUserCommand
             request.Location,
             groupNameValue,
             twoFactorAuthentication,
-            request.MfaMethods);
+            request.MfaMethods,
+            request.PhoneNo,
+            request.Language,
+            request.CountryCode,
+            request.AvatarPath,
+            request.UiPreference,
+            request.SecondaryEmail,
+            request.UserType,
+            request.IdCardPath,
+            request.SignaturePath,
+            request.CreatedBy);
 
         if (!string.IsNullOrWhiteSpace(request.Password))
             user.SetPasswordHash(BCrypt.Net.BCrypt.HashPassword(request.Password.Trim()));
