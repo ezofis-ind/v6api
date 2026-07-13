@@ -55,6 +55,9 @@ public sealed class UserExtendedResponse
     public string? IdCardPath { get; set; }
     public string? SignaturePath { get; set; }
 
+    /// <summary>0 = onboarding not completed, 1 = completed.</summary>
+    public int Configuration { get; set; }
+
     public DateTime CreatedAtUtc { get; set; }
     public Guid? CreatedBy { get; set; }
     public DateTime? ModifiedAtUtc { get; set; }

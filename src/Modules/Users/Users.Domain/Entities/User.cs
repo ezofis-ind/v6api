@@ -63,6 +63,9 @@ public sealed class User : Entity<Guid>, ITenantEntity
     // Preferences
     public string? UiPreference { get; private set; }
 
+    /// <summary>Onboarding/configuration wizard: 0 = not completed, 1 = completed.</summary>
+    public int Configuration { get; private set; }
+
     // Audit
     public DateTime? ModifiedAtUtc { get; private set; }
     public Guid? CreatedBy { get; private set; }
@@ -301,6 +304,13 @@ public sealed class User : Entity<Guid>, ITenantEntity
     public void SetLoginType(string? loginType)
     {
         LoginType = string.IsNullOrWhiteSpace(loginType) ? null : loginType.Trim();
+    }
+
+    /// <summary>Marks onboarding configuration as completed (Configuration = 1).</summary>
+    public void MarkConfigurationCompleted()
+    {
+        Configuration = 1;
+        ModifiedAtUtc = DateTime.UtcNow;
     }
 
     /// <summary>Set PIN hash for PIN-based login.</summary>

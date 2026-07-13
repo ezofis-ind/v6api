@@ -258,6 +258,7 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
 (
     {alias}.ActivityUserId = @CurrentUserGuid
     OR {alias}.CreatedBy = @CurrentUserGuid
+    OR {alias}.ModifiedBy = @CurrentUserGuid
     OR (
         {alias}.ActivityGroupId IS NOT NULL
         AND EXISTS (
@@ -391,7 +392,8 @@ WHERE ranked.mailbox_rn = 1;";
     m.commentsCount, m.attachmentCount, m.activityUserEmail, m.activityGroupName,
     av.AgentValidationWorkflowId,
     ISNULL(av.AgentResponse, N'') AS AgentResponse,
-    ISNULL(av.AgentHtmlResponse, N'') AS AgentHtml
+    ISNULL(av.AgentHtmlResponse, N'') AS AgentHtml,
+    ISNULL(m.[action], 1) AS [action]
 """;
 
         if (!latestOnlyPerInstance)
@@ -541,7 +543,8 @@ ORDER BY m.transaction_createdAt DESC, m.id DESC;";
             ActivityGroupName: reader.IsDBNull(37) ? null : reader.GetString(37),
             AgentValidationWorkflowId: reader.IsDBNull(38) ? null : reader.GetString(38),
             AgentResponse: reader.IsDBNull(39) ? null : reader.GetString(39),
-            AgentHtml: reader.IsDBNull(40) ? null : reader.GetString(40));
+            AgentHtml: reader.IsDBNull(40) ? null : reader.GetString(40),
+            Action: reader.FieldCount > 41 && !reader.IsDBNull(41) ? reader.GetInt32(41) : 1);
 
     private static async Task<string> BuildAgentValidationApplyAsync(
         SqlConnection connection,

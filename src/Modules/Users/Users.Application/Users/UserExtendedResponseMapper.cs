@@ -38,6 +38,7 @@ internal static class UserExtendedResponseMapper
             UserType = user.UserType,
             IdCardPath = user.IdCardPath,
             SignaturePath = user.SignaturePath,
+            Configuration = user.Configuration,
             CreatedAtUtc = user.CreatedAtUtc,
             CreatedBy = user.CreatedBy,
             ModifiedAtUtc = user.ModifiedAtUtc,

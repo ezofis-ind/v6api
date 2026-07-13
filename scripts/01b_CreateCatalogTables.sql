@@ -37,8 +37,7 @@ BEGIN
         [Email] NVARCHAR(256) NULL,
         [SignupSource] NVARCHAR(128) NULL,
         [Platform] NVARCHAR(64) NULL,
-        [AppVersion] NVARCHAR(32) NULL,
-        CONSTRAINT [IX_Tenants_Name] UNIQUE ([Name])
+        [AppVersion] NVARCHAR(32) NULL
     );
     CREATE INDEX [IX_Tenants_IsActive] ON [catalog].[Tenants] ([IsActive]);
     PRINT '✓ catalog.Tenants table created';

@@ -321,24 +321,26 @@ END";
         string workflowKey,
         CancellationToken cancellationToken)
     {
-        if (LegacyMailboxSchemaEnsured.ContainsKey(workflowKey))
-            return;
-
-        var inbox = GenerateLegacyMailboxTableScript("Inbox", workflowKey);
-        var sent = GenerateLegacyMailboxTableScript("Sent", workflowKey);
-        var completed = GenerateLegacyMailboxTableScript("Completed", workflowKey);
-
-        foreach (var script in new[] { inbox, sent, completed })
+        if (!LegacyMailboxSchemaEnsured.ContainsKey(workflowKey))
         {
-            await using var cmd = new SqlCommand(script, connection);
-            cmd.CommandTimeout = 120;
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            var inbox = GenerateLegacyMailboxTableScript("Inbox", workflowKey);
+            var sent = GenerateLegacyMailboxTableScript("Sent", workflowKey);
+            var completed = GenerateLegacyMailboxTableScript("Completed", workflowKey);
+
+            foreach (var script in new[] { inbox, sent, completed })
+            {
+                await using var cmd = new SqlCommand(script, connection);
+                cmd.CommandTimeout = 120;
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await EnsureLegacyMailboxIndexesAsync(connection, workflowKey, cancellationToken);
+            await EnsureLegacyTransactionMailboxIndexesAsync(connection, workflowKey, cancellationToken);
+            LegacyMailboxSchemaEnsured.TryAdd(workflowKey, 0);
         }
 
+        // Always run idempotent column migrates (e.g. action) so existing DBs pick up new columns.
         await MigrateLegacyMailboxInstanceColumnsAsync(connection, workflowKey, cancellationToken);
-        await EnsureLegacyMailboxIndexesAsync(connection, workflowKey, cancellationToken);
-        await EnsureLegacyTransactionMailboxIndexesAsync(connection, workflowKey, cancellationToken);
-        LegacyMailboxSchemaEnsured.TryAdd(workflowKey, 0);
     }
 
     private static async Task EnsureLegacyTransactionMailboxIndexesAsync(
@@ -418,6 +420,9 @@ BEGIN
         ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD formEntryId nvarchar(255) NULL;
     IF COL_LENGTH('{tableFullName}', 'formData') IS NULL
         ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD formData nvarchar(max) NULL;
+    IF COL_LENGTH('{tableFullName}', 'action') IS NULL
+        ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD [action] int NOT NULL
+            CONSTRAINT [DF_{prefix}_{workflowKey}_action] DEFAULT (1);
 END";
             await using var cmd = new SqlCommand(sql, connection) { CommandTimeout = 120 };
             await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -472,6 +477,7 @@ BEGIN
         itemData nvarchar(max) NULL,
         activityUserEmail nvarchar(max) NULL,
         activityGroupName nvarchar(max) NULL,
+        [action] int NOT NULL CONSTRAINT [DF_{prefix}_{workflowKey}_action] DEFAULT (1),
         PRIMARY KEY CLUSTERED (id ASC)
     ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
 END";

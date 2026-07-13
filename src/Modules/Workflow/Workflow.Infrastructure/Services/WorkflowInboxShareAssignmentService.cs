@@ -38,12 +38,15 @@ public sealed class WorkflowInboxShareAssignmentService : IWorkflowInboxShareAss
         Guid workflowInstanceId,
         Guid guestUserId,
         Guid modifiedByUserId,
+        int action = 1,
         CancellationToken cancellationToken = default)
     {
         if (guestUserId == Guid.Empty)
             throw new ArgumentException("Guest user id is required.", nameof(guestUserId));
         if (modifiedByUserId == Guid.Empty)
             throw new ArgumentException("Modified by user id is required.", nameof(modifiedByUserId));
+
+        var inboxAction = action == 0 ? 0 : 1;
 
         var instance = await _repository.GetInstanceByIdAsync(workflowInstanceId, cancellationToken)
             ?? throw new InvalidOperationException("Workflow instance not found.");
@@ -92,7 +95,8 @@ public sealed class WorkflowInboxShareAssignmentService : IWorkflowInboxShareAss
         await _mailboxSync.SyncTransactionRowAsync(
             workflowId,
             openTransaction.Value.TransactionId,
-            cancellationToken);
+            cancellationToken,
+            inboxAction);
 
         return new WorkflowInboxShareAssignmentResult(
             workflowId,

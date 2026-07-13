@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
+using SaaSApp.Repository.Application.Contracts;
 using SaaSApp.Workflow.Application.Contracts;
 using SaaSApp.Workflow.Application.Workflows;
 using SaaSApp.Workflow.Domain.Entities;
@@ -24,17 +25,20 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
     private readonly ITenantContext _tenantContext;
     private readonly IWorkflowTableCreator _tableCreator;
     private readonly WorkflowLegacyMailboxSyncService _mailboxSync;
+    private readonly IRepositoryItemShareService _itemShares;
     private readonly ILogger<WorkflowLegacyTransactionSyncService> _logger;
 
     public WorkflowLegacyTransactionSyncService(
         ITenantContext tenantContext,
         IWorkflowTableCreator tableCreator,
         WorkflowLegacyMailboxSyncService mailboxSync,
+        IRepositoryItemShareService itemShares,
         ILogger<WorkflowLegacyTransactionSyncService> logger)
     {
         _tenantContext = tenantContext;
         _tableCreator = tableCreator;
         _mailboxSync = mailboxSync;
+        _itemShares = itemShares;
         _logger = logger;
     }
 
@@ -209,7 +213,13 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
 
                 if (nextExists == null)
                 {
-                    var nextActivityUserId = nextStep.AssignedToUserId ?? resolvedActivityUserId;
+                    var (nextActivityUserId, nextCreatedByUserId) = await ResolveNextStepAssigneeAsync(
+                        workflowInstanceId,
+                        nextStep,
+                        resolvedActivityUserId,
+                        userId,
+                        cancellationToken);
+
                     (nextTransactionId, nextTransactionGuid) = await InsertOpenTransactionForDefinitionStepAsync(
                         connection,
                         transactionTable,
@@ -217,7 +227,7 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
                         nextStep,
                         nextTxActivityId,
                         nextActivityUserId,
-                        userId,
+                        nextCreatedByUserId,
                         matchedRule?.Id,
                         cancellationToken);
 
@@ -233,8 +243,17 @@ public sealed class WorkflowLegacyTransactionSyncService : IWorkflowLegacyTransa
                     }
 
                     _logger.LogInformation(
-                        "Inserted next step transaction {TransactionId} order {Order} after review on {ActivityId}",
-                        nextTransactionId, nextStep.Order, txActivityId);
+                        "Inserted next step transaction {TransactionId} order {Order} after review on {ActivityId} (assignee {AssigneeUserId})",
+                        nextTransactionId, nextStep.Order, txActivityId, nextActivityUserId);
+
+                    return new WorkflowLegacyTransactionSyncResult(
+                        LegacyTransactionSyncStatus.ReviewUpdated,
+                        workflowInstanceId,
+                        existingRow.Id,
+                        nextTransactionId,
+                        nextTransactionGuid,
+                        workflowCompleted,
+                        nextActivityUserId);
                 }
             }
             else
@@ -424,6 +443,45 @@ WHERE Id = @WorkflowInstanceId;";
         cmd.Parameters.AddWithValue("@Status", (int)WorkflowInstanceStatus.Completed);
         cmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// After a workflow inbox share, return the next open step to the sharer (not the guest).
+    /// Uses SharedByUserId as both assignee and CreatedBy so the guest does not keep inbox via CreatedBy.
+    /// </summary>
+    private async Task<(Guid ActivityUserId, Guid CreatedByUserId)> ResolveNextStepAssigneeAsync(
+        Guid workflowInstanceId,
+        WorkflowStep nextStep,
+        Guid resolvedActivityUserId,
+        Guid currentUserId,
+        CancellationToken cancellationToken)
+    {
+        if (nextStep.AssignedToUserId is Guid stepAssignee && stepAssignee != Guid.Empty)
+            return (stepAssignee, currentUserId);
+
+        try
+        {
+            var shareOwnerId = await _itemShares.GetActiveWorkflowShareOwnerUserIdAsync(
+                workflowInstanceId,
+                cancellationToken);
+            if (shareOwnerId is Guid ownerId && ownerId != Guid.Empty)
+            {
+                _logger.LogInformation(
+                    "Returning workflow instance {InstanceId} next step to share owner {OwnerUserId} after guest move-next",
+                    workflowInstanceId,
+                    ownerId);
+                return (ownerId, ownerId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve workflow share owner for instance {InstanceId}; using default next assignee",
+                workflowInstanceId);
+        }
+
+        return (resolvedActivityUserId, currentUserId);
     }
 
     private static async Task<(int Id, Guid Guid)> InsertOpenTransactionForDefinitionStepAsync(

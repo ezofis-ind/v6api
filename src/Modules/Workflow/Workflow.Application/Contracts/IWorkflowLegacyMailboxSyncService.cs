@@ -7,10 +7,14 @@ namespace SaaSApp.Workflow.Application.Contracts;
 public interface IWorkflowLegacyMailboxSyncService
 {
     /// <summary>Upserts/removes mailbox row for a single transaction row after insert or update.</summary>
+    /// <param name="inboxAction">
+    /// Optional Inbox <c>action</c> flag (0/1). When null, defaults to 1 (show verify/approve).
+    /// </param>
     Task SyncTransactionRowAsync(
         Guid workflowId,
         int transactionRowId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        int? inboxAction = null);
 
     /// <summary>Syncs all END-stage transactions for a workflow instance (e.g. when workflow completes).</summary>
     Task SyncInstanceEndTransactionsAsync(

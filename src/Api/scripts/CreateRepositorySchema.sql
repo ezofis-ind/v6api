@@ -47,6 +47,7 @@ BEGIN
         StorageDrive        NVARCHAR(500) NULL,
         ItemsTableName      NVARCHAR(128) NOT NULL,
         StageTableName      NVARCHAR(128) NOT NULL,
+        IsDefaultRepository BIT NOT NULL CONSTRAINT DF_Repositories_IsDefaultRepository DEFAULT (1),
         CreatedAtUtc        DATETIME2(3) NOT NULL CONSTRAINT DF_Repositories_CreatedAtUtc DEFAULT (SYSUTCDATETIME()),
         ModifiedAtUtc       DATETIME2(3) NULL,
         CreatedBy           UNIQUEIDENTIFIER NULL,
@@ -171,4 +172,12 @@ END
 GO
 
 PRINT 'Repository base schema complete.';
+GO
+
+IF COL_LENGTH('repository.Repositories', 'IsDefaultRepository') IS NULL
+BEGIN
+    ALTER TABLE repository.Repositories
+        ADD IsDefaultRepository BIT NOT NULL CONSTRAINT DF_Repositories_IsDefaultRepository DEFAULT (1);
+    PRINT 'repository.Repositories.IsDefaultRepository added';
+END
 GO

@@ -185,7 +185,11 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
 
             WorkflowStepTransitionHelper.CompleteStepInstance(instance, targetDefinitionStep.Id, userId);
             if (nextDefinitionStep != null && !workflowCompleted)
+            {
                 WorkflowStepTransitionHelper.StartStepInstance(instance, nextDefinitionStep.Id);
+                if (legacySync.NextActivityUserId is Guid nextAssignee && nextAssignee != Guid.Empty)
+                    instance.Reassign(nextAssignee);
+            }
             else
             {
                 instance.Complete(userId);
@@ -232,8 +236,7 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
             _ => "OK"
         };
 
-        if (!string.IsNullOrWhiteSpace(request.Comments)
-            && !WorkflowCommentHelper.IsProceedActionSystemComment(request.Comments))
+        if (!string.IsNullOrWhiteSpace(request.Comments))
         {
             var stepInstanceId = WorkflowStepTransitionHelper.FindStepInstance(instance, targetDefinitionStep.Id)?.Id;
             await _dynamicTableRepository.AddCommentAsync(

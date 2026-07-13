@@ -52,8 +52,8 @@ public sealed class StaticRepositoryProvisioner : IStaticRepositoryProvisioner
         {
             const string insertRepo = """
                 INSERT INTO repository.Repositories
-                (Id, TenantId, Name, Description, FieldsType, StorageProviderId, StorageDrive, ItemsTableName, StageTableName, CreatedBy)
-                VALUES (@Id, @TenantId, @Name, @Description, 'STATIC', @StorageProviderId, @StorageDrive, @ItemsTableName, @StageTableName, @CreatedBy);
+                (Id, TenantId, Name, Description, FieldsType, StorageProviderId, StorageDrive, ItemsTableName, StageTableName, IsDefaultRepository, CreatedBy)
+                VALUES (@Id, @TenantId, @Name, @Description, 'STATIC', @StorageProviderId, @StorageDrive, @ItemsTableName, @StageTableName, @IsDefaultRepository, @CreatedBy);
                 """;
 
             await using (var cmd = new SqlCommand(insertRepo, connection, tx))
@@ -66,6 +66,7 @@ public sealed class StaticRepositoryProvisioner : IStaticRepositoryProvisioner
                 cmd.Parameters.AddWithValue("@StorageDrive", (object?)request.StorageDrive ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@ItemsTableName", itemsTable);
                 cmd.Parameters.AddWithValue("@StageTableName", stageTable);
+                cmd.Parameters.AddWithValue("@IsDefaultRepository", request.IsDefaultRepository);
                 cmd.Parameters.AddWithValue("@CreatedBy", (object?)userId ?? DBNull.Value);
                 await cmd.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -125,9 +126,21 @@ public sealed class StaticRepositoryProvisioner : IStaticRepositoryProvisioner
         await connection.OpenAsync(cancellationToken);
 
         const string sql = """
-            SELECT Id, Name, Description, StorageProviderId, StorageDrive, ItemsTableName, StageTableName
-            FROM repository.Repositories
-            WHERE Id = @Id AND TenantId = @TenantId AND IsDeleted = 0;
+            SELECT
+                r.Id,
+                r.Name,
+                r.Description,
+                r.StorageProviderId,
+                r.StorageDrive,
+                r.ItemsTableName,
+                r.StageTableName,
+                r.IsDefaultRepository,
+                r.IsDeleted,
+                sp.Code AS StorageProviderCode,
+                sp.Name AS StorageProviderName
+            FROM repository.Repositories r
+            LEFT JOIN repository.StorageProviders sp ON sp.Id = r.StorageProviderId AND sp.IsDeleted = 0
+            WHERE r.Id = @Id AND r.TenantId = @TenantId;
             """;
 
         await using var cmd = new SqlCommand(sql, connection);
@@ -140,6 +153,10 @@ public sealed class StaticRepositoryProvisioner : IStaticRepositoryProvisioner
         string? storageDrive;
         string itemsTableName;
         string stageTableName;
+        bool isDefaultRepository;
+        bool isDeleted;
+        string? storageProviderCode;
+        string? storageProviderName;
 
         await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
         {
@@ -152,11 +169,23 @@ public sealed class StaticRepositoryProvisioner : IStaticRepositoryProvisioner
             storageDrive = reader.IsDBNull(4) ? null : reader.GetString(4);
             itemsTableName = reader.GetString(5);
             stageTableName = reader.GetString(6);
+            isDefaultRepository = !reader.IsDBNull(7) && reader.GetBoolean(7);
+            isDeleted = !reader.IsDBNull(8) && reader.GetBoolean(8);
+            storageProviderCode = reader.IsDBNull(9) ? null : reader.GetString(9);
+            storageProviderName = reader.IsDBNull(10) ? null : reader.GetString(10);
         }
+
+        var fields = await LoadFieldsAsync(connection, repositoryId, cancellationToken);
+        var fileCount = await CountItemsAsync(connection, itemsTableName, cancellationToken);
 
         return new RepositoryDetailDto(
             id, name, description, storageProviderId, storageDrive, itemsTableName, stageTableName,
-            await LoadFieldsAsync(connection, repositoryId, cancellationToken));
+            isDefaultRepository,
+            fields,
+            fileCount,
+            Status: isDeleted ? "Inactive" : "Active",
+            StorageProviderCode: storageProviderCode,
+            StorageProviderName: storageProviderName);
     }
 
     public async Task<IReadOnlyList<RepositorySummaryDto>> ListRepositoriesAsync(Guid tenantId, CancellationToken cancellationToken = default)
@@ -173,34 +202,82 @@ public sealed class StaticRepositoryProvisioner : IStaticRepositoryProvisioner
                 r.StorageProviderId,
                 r.ItemsTableName,
                 r.CreatedAtUtc,
+                r.IsDefaultRepository,
+                r.IsDeleted,
+                sp.Code AS StorageProviderCode,
+                sp.Name AS StorageProviderName,
                 r.CreatedBy,
                 r.ModifiedBy,
                 cb.Email AS CreatedByName,
                 COALESCE(mb.Email, cb.Email) AS ModifiedByName
             FROM repository.Repositories r
+            LEFT JOIN repository.StorageProviders sp ON sp.Id = r.StorageProviderId AND sp.IsDeleted = 0
             LEFT JOIN users.Users cb ON cb.Id = r.CreatedBy AND cb.IsDeleted = 0
             LEFT JOIN users.Users mb ON mb.Id = r.ModifiedBy AND mb.IsDeleted = 0
-            WHERE r.TenantId = @TenantId AND r.IsDeleted = 0
-            ORDER BY r.Name;
+            WHERE r.TenantId = @TenantId
+            ORDER BY r.IsDeleted, r.Name;
             """;
 
-        var list = new List<RepositorySummaryDto>();
-        await using var cmd = new SqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue("@TenantId", tenantId);
-        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        var rows = new List<(
+            Guid Id,
+            string Name,
+            string? Description,
+            Guid StorageProviderId,
+            string ItemsTableName,
+            DateTime CreatedAtUtc,
+            bool IsDefaultRepository,
+            bool IsDeleted,
+            string? StorageProviderCode,
+            string? StorageProviderName,
+            Guid? CreatedBy,
+            Guid? ModifiedBy,
+            string? CreatedByName,
+            string? ModifiedByName)>();
+
+        await using (var cmd = new SqlCommand(sql, connection))
         {
+            cmd.Parameters.AddWithValue("@TenantId", tenantId);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                rows.Add((
+                    reader.GetGuid(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.GetGuid(3),
+                    reader.GetString(4),
+                    reader.GetDateTime(5),
+                    !reader.IsDBNull(6) && reader.GetBoolean(6),
+                    !reader.IsDBNull(7) && reader.GetBoolean(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9),
+                    reader.IsDBNull(10) ? null : reader.GetGuid(10),
+                    reader.IsDBNull(11) ? null : reader.GetGuid(11),
+                    reader.IsDBNull(12) ? null : reader.GetString(12),
+                    reader.IsDBNull(13) ? null : reader.GetString(13)));
+            }
+        }
+
+        var list = new List<RepositorySummaryDto>(rows.Count);
+        foreach (var row in rows)
+        {
+            var fileCount = await CountItemsAsync(connection, row.ItemsTableName, cancellationToken);
             list.Add(new RepositorySummaryDto(
-                reader.GetGuid(0),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.GetGuid(3),
-                reader.GetString(4),
-                reader.GetDateTime(5),
-                reader.IsDBNull(6) ? null : reader.GetGuid(6),
-                reader.IsDBNull(7) ? null : reader.GetGuid(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.IsDBNull(9) ? null : reader.GetString(9)));
+                row.Id,
+                row.Name,
+                row.Description,
+                row.StorageProviderId,
+                row.ItemsTableName,
+                row.CreatedAtUtc,
+                row.IsDefaultRepository,
+                fileCount,
+                Status: row.IsDeleted ? "Inactive" : "Active",
+                StorageProviderCode: row.StorageProviderCode,
+                StorageProviderName: row.StorageProviderName,
+                CreatedBy: row.CreatedBy,
+                ModifiedBy: row.ModifiedBy,
+                CreatedByName: row.CreatedByName,
+                ModifiedByName: row.ModifiedByName));
         }
 
         return list;
@@ -693,6 +770,29 @@ public sealed class StaticRepositoryProvisioner : IStaticRepositoryProvisioner
         await using var cmd = new SqlCommand(sql, connection);
         cmd.Parameters.AddWithValue("@Name", tableName);
         return await cmd.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    /// <summary>Counts non-deleted items in the repository items table (0 if table missing/invalid).</summary>
+    private static async Task<int> CountItemsAsync(
+        SqlConnection connection,
+        string itemsTableName,
+        CancellationToken cancellationToken)
+    {
+        if (!RepositorySqlHelper.IsValidItemsTableName(itemsTableName))
+            return 0;
+
+        if (!await TableExistsAsync(connection, itemsTableName, cancellationToken))
+            return 0;
+
+        var table = RepositorySqlHelper.QualifiedItemsTable(itemsTableName);
+        var sql = $"SELECT COUNT_BIG(1) FROM {table} WHERE IsDeleted = 0;";
+        await using var cmd = new SqlCommand(sql, connection);
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        if (result == null || result == DBNull.Value)
+            return 0;
+
+        var count = Convert.ToInt64(result);
+        return count > int.MaxValue ? int.MaxValue : (int)count;
     }
 
     private async Task<IReadOnlyList<RepositoryFieldDefinitionDto>> LoadFieldDefinitionsAsync(

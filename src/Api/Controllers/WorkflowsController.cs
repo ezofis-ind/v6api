@@ -510,12 +510,51 @@ public sealed class WorkflowsController : ControllerBase
         var sortColumn = MapInboxSortColumn(request.SortBy?.Criteria);
         var sortOrder = string.Equals(request.SortBy?.Order, "ASC", StringComparison.OrdinalIgnoreCase) ? "ASC" : "DESC";
 
+        var inboxTableExists = false;
+        await using (var inboxCheck = new SqlCommand(
+            """
+            SELECT CASE WHEN OBJECT_ID(@InboxFull, N'U') IS NOT NULL
+                         AND COL_LENGTH(@InboxFull, 'action') IS NOT NULL
+                        THEN 1 ELSE 0 END
+            """,
+            connection))
+        {
+            inboxCheck.Parameters.AddWithValue("@InboxFull", $"workflow.Inbox_{suffix}");
+            inboxTableExists = Convert.ToInt32(await inboxCheck.ExecuteScalarAsync(cancellationToken)) == 1;
+        }
+
+        var actionSelectSql = inboxTableExists
+            ? $"""
+                ISNULL((
+                    SELECT TOP 1 ISNULL(ib.[action], 1)
+                    FROM workflow.[Inbox_{suffix}] ib
+                    WHERE TRY_CONVERT(UNIQUEIDENTIFIER, ib.workflowInstanceId) = t.WorkflowInstanceId
+                      AND (
+                            ib.userId = CONVERT(NVARCHAR(100), @CurrentUserId)
+                         OR ib.transaction_modifiedBy = CONVERT(NVARCHAR(255), @CurrentUserId)
+                      )
+                    ORDER BY ib.id DESC
+                ), 1)
+                """
+            : "1";
+
         var whereParts = new List<string>
         {
             "t.IsDeleted = 0",
             "wi.Status = @RunningStatus",
             "t.ActionStatus = 0",
-            "(t.ActivityUserId = @CurrentUserId OR EXISTS (SELECT 1 FROM workflow.groupUser gu WHERE gu.GroupId = t.ActivityGroupId AND gu.UserId = @CurrentUserId AND gu.IsDeleted = 0))"
+            """
+            (
+                t.ActivityUserId = @CurrentUserId
+                OR t.ModifiedBy = @CurrentUserId
+                OR EXISTS (
+                    SELECT 1 FROM workflow.groupUser gu
+                    WHERE gu.GroupId = t.ActivityGroupId
+                      AND gu.UserId = @CurrentUserId
+                      AND gu.IsDeleted = 0
+                )
+            )
+            """
         };
         var parameters = new List<SqlParameter>
         {
@@ -557,7 +596,8 @@ public sealed class WorkflowsController : ControllerBase
                 t.CreatedBy AS TransactionCreatedBy,
                 t.ModifiedAt AS TransactionModifiedAt,
                 t.ActivityUserId,
-                t.ActivityGroupId
+                t.ActivityGroupId,
+                {actionSelectSql} AS [Action]
             FROM {transactionTable} t
             INNER JOIN {instancesTable} wi ON wi.Id = t.WorkflowInstanceId
             WHERE {whereSql}
@@ -601,7 +641,8 @@ public sealed class WorkflowsController : ControllerBase
                     ActivityGroupId: reader.IsDBNull(15) ? null : reader.GetInt32(15),
                     FormData: null,
                     RepositoryData: null,
-                    CommentsCount: 0));
+                    CommentsCount: 0,
+                    Action: reader.IsDBNull(16) ? 1 : reader.GetInt32(16)));
             }
         }
 
@@ -628,8 +669,9 @@ public sealed class WorkflowsController : ControllerBase
 
     /// <summary>
     /// Share a workflow inbox file with an external user by email.
-    /// Creates a guest TenantUser (password set on first login), assigns the open inbox task to them,
-    /// and returns a share link for read-only file access plus inbox verify/approve.
+    /// Creates a guest TenantUser (password set on first login), assigns the open inbox task to them
+    /// (owner remains visible on inbox via share CC), and returns a share link for read-only file access.
+    /// When the guest moves next, their row goes to Sent and the next open step returns to the sharer inbox.
     /// </summary>
     [HttpPost("instances/{instanceId:guid}/share-file")]
     [ProducesResponseType(typeof(WorkflowInboxShareResponse), StatusCodes.Status201Created)]
@@ -665,6 +707,7 @@ public sealed class WorkflowsController : ControllerBase
                 instanceId,
                 guestUserId,
                 userId.Value,
+                request.Action == 0 ? 0 : 1,
                 cancellationToken);
 
             return Created(string.Empty, new WorkflowInboxShareResponse(share, inboxAssignment, guestUserId));
@@ -2209,4 +2252,5 @@ public sealed record WorkflowInboxItem(
     int? ActivityGroupId,
     WorkflowInboxFormData? FormData,
     WorkflowInboxRepositoryData? RepositoryData,
-    int CommentsCount);
+    int CommentsCount,
+    int Action = 1);

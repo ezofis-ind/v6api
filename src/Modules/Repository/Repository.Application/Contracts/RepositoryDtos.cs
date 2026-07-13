@@ -9,6 +9,8 @@ public sealed record CreateRepositoryRequest(
     /// <summary>Alternative to StorageProviderId — e.g. EZOFIS, GCP, ONEDRIVE (case-insensitive).</summary>
     string? StorageProviderCode = null,
     string? StorageDrive = null,
+    /// <summary>When true (default), repository definition is system/default and should not be edited in UI.</summary>
+    bool IsDefaultRepository = true,
     IReadOnlyList<RepositoryFieldDefinitionDto>? Fields = null);
 
 public sealed record StorageProviderDto(Guid Id, string Code, string Name, bool IsActive);
@@ -43,6 +45,15 @@ public sealed record RepositorySummaryDto(
     Guid StorageProviderId,
     string ItemsTableName,
     DateTime CreatedAtUtc,
+    bool IsDefaultRepository,
+    /// <summary>Non-deleted files/documents in the repository items table.</summary>
+    int FileCount = 0,
+    /// <summary><c>Active</c> when IsDeleted = 0; <c>Inactive</c> when IsDeleted = 1.</summary>
+    string Status = "Active",
+    /// <summary>Storage provider code — e.g. EZOFIS, ONEDRIVE, GCP.</summary>
+    string? StorageProviderCode = null,
+    /// <summary>Display name — e.g. EZOFIS Storage, Microsoft OneDrive, Google Cloud Storage.</summary>
+    string? StorageProviderName = null,
     Guid? CreatedBy = null,
     Guid? ModifiedBy = null,
     string? CreatedByName = null,
@@ -56,7 +67,16 @@ public sealed record RepositoryDetailDto(
     string? StorageDrive,
     string ItemsTableName,
     string StageTableName,
-    IReadOnlyList<RepositoryFieldDto> Fields);
+    bool IsDefaultRepository,
+    IReadOnlyList<RepositoryFieldDto> Fields,
+    /// <summary>Non-deleted files/documents in the repository items table.</summary>
+    int FileCount = 0,
+    /// <summary><c>Active</c> when IsDeleted = 0; <c>Inactive</c> when IsDeleted = 1.</summary>
+    string Status = "Active",
+    /// <summary>Storage provider code — e.g. EZOFIS, ONEDRIVE, GCP.</summary>
+    string? StorageProviderCode = null,
+    /// <summary>Display name — e.g. EZOFIS Storage, Microsoft OneDrive, Google Cloud Storage.</summary>
+    string? StorageProviderName = null);
 
 public sealed record RepositoryFieldDto(
     Guid Id,
@@ -182,7 +202,9 @@ public sealed record RepositoryItemListDto(
     string? PayToAddress,
     Guid StorageProviderId,
     string? StorageProviderCode,
-    bool HasFilePath);
+    bool HasFilePath,
+    /// <summary>When set, this file was linked from a workflow ticket initiate/upload.</summary>
+    Guid? WorkflowInstanceId = null);
 
 public sealed record RepositoryItemDetailDto(
     Guid Id,

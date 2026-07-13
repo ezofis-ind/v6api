@@ -103,6 +103,7 @@ internal static class RepositoryItemListReader
         parts.Add("i.StorageProviderId");
         parts.Add("sp.Code");
         AddColumn("FilePath");
+        AddColumn("WorkflowInstanceId");
 
         return string.Join(", ", parts);
     }
@@ -116,6 +117,12 @@ internal static class RepositoryItemListReader
         var fileName = GetString(reader, "FileName");
         var ocrJson = GetString(reader, tableColumns, "OcrJson");
         var summaryJson = GetString(reader, tableColumns, "SummaryJson");
+        Guid? workflowInstanceId = null;
+        if (RepositoryItemTableColumns.Has(tableColumns, "WorkflowInstanceId")
+            && !reader.IsDBNull(reader.GetOrdinal("WorkflowInstanceId")))
+        {
+            workflowInstanceId = reader.GetGuid(reader.GetOrdinal("WorkflowInstanceId"));
+        }
 
         var row = new RepositoryItemListDto(
             id,
@@ -148,7 +155,8 @@ internal static class RepositoryItemListReader
             reader.GetString(reader.GetOrdinal("Code")),
             RepositoryItemTableColumns.Has(tableColumns, "FilePath")
                 && !reader.IsDBNull(reader.GetOrdinal("FilePath"))
-                && !string.IsNullOrWhiteSpace(reader.GetString(reader.GetOrdinal("FilePath"))));
+                && !string.IsNullOrWhiteSpace(reader.GetString(reader.GetOrdinal("FilePath"))),
+            workflowInstanceId);
 
         return RepositoryItemListMetadataEnricher.Enrich(row, ocrJson, summaryJson, repository, reader, tableColumns);
     }

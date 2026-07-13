@@ -26,16 +26,6 @@ public sealed class AddCommentCommandHandler : IRequestHandler<AddCommentCommand
 
         var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowComments");
 
-        if (WorkflowCommentHelper.IsProceedActionSystemComment(request.Comments))
-        {
-            return new AddCommentCommandResult(
-                Guid.Empty,
-                request.WorkflowId,
-                request.WorkflowInstanceId,
-                tableName,
-                Skipped: true);
-        }
-
         var commentId = await _dynamicTableRepository.AddCommentAsync(
             request.WorkflowId,
             request.WorkflowInstanceId,

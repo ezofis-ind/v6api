@@ -16,9 +16,21 @@ internal static class RepositoryCrossTenantItemReader
         await connection.OpenAsync(cancellationToken);
 
         const string sql = """
-            SELECT Id, Name, Description, StorageProviderId, StorageDrive, ItemsTableName, StageTableName
-            FROM repository.Repositories
-            WHERE Id = @Id AND TenantId = @TenantId AND IsDeleted = 0;
+            SELECT
+                r.Id,
+                r.Name,
+                r.Description,
+                r.StorageProviderId,
+                r.StorageDrive,
+                r.ItemsTableName,
+                r.StageTableName,
+                r.IsDefaultRepository,
+                r.IsDeleted,
+                sp.Code AS StorageProviderCode,
+                sp.Name AS StorageProviderName
+            FROM repository.Repositories r
+            LEFT JOIN repository.StorageProviders sp ON sp.Id = r.StorageProviderId AND sp.IsDeleted = 0
+            WHERE r.Id = @Id AND r.TenantId = @TenantId;
             """;
 
         await using var cmd = new SqlCommand(sql, connection);
@@ -31,6 +43,10 @@ internal static class RepositoryCrossTenantItemReader
         string? storageDrive;
         string itemsTableName;
         string stageTableName;
+        bool isDefaultRepository;
+        bool isDeleted;
+        string? storageProviderCode;
+        string? storageProviderName;
 
         await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
         {
@@ -44,7 +60,14 @@ internal static class RepositoryCrossTenantItemReader
             storageDrive = reader.IsDBNull(4) ? null : reader.GetString(4);
             itemsTableName = reader.GetString(5);
             stageTableName = reader.GetString(6);
+            isDefaultRepository = !reader.IsDBNull(7) && reader.GetBoolean(7);
+            isDeleted = !reader.IsDBNull(8) && reader.GetBoolean(8);
+            storageProviderCode = reader.IsDBNull(9) ? null : reader.GetString(9);
+            storageProviderName = reader.IsDBNull(10) ? null : reader.GetString(10);
         }
+
+        var fields = await LoadFieldsAsync(connection, repositoryId, cancellationToken);
+        var fileCount = await CountItemsAsync(connection, itemsTableName, cancellationToken);
 
         return new RepositoryDetailDto(
             id,
@@ -54,7 +77,43 @@ internal static class RepositoryCrossTenantItemReader
             storageDrive,
             itemsTableName,
             stageTableName,
-            await LoadFieldsAsync(connection, repositoryId, cancellationToken));
+            isDefaultRepository,
+            fields,
+            fileCount,
+            Status: isDeleted ? "Inactive" : "Active",
+            StorageProviderCode: storageProviderCode,
+            StorageProviderName: storageProviderName);
+    }
+
+    private static async Task<int> CountItemsAsync(
+        SqlConnection connection,
+        string itemsTableName,
+        CancellationToken cancellationToken)
+    {
+        if (!RepositorySqlHelper.IsValidItemsTableName(itemsTableName))
+            return 0;
+
+        const string existsSql = """
+            SELECT 1 FROM sys.tables t
+            INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+            WHERE t.name = @Name AND s.name = 'repository';
+            """;
+        await using (var existsCmd = new SqlCommand(existsSql, connection))
+        {
+            existsCmd.Parameters.AddWithValue("@Name", itemsTableName);
+            if (await existsCmd.ExecuteScalarAsync(cancellationToken) is null)
+                return 0;
+        }
+
+        var table = RepositorySqlHelper.QualifiedItemsTable(itemsTableName);
+        var sql = $"SELECT COUNT_BIG(1) FROM {table} WHERE IsDeleted = 0;";
+        await using var cmd = new SqlCommand(sql, connection);
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        if (result == null || result == DBNull.Value)
+            return 0;
+
+        var count = Convert.ToInt64(result);
+        return count > int.MaxValue ? int.MaxValue : (int)count;
     }
 
     public static async Task<RepositoryItemDetailDto?> GetItemAsync(

@@ -9,10 +9,14 @@ public interface IWorkflowInboxShareAssignmentService
   /// Points the open legacy transaction (and mailbox inbox row) at the guest user
   /// so they can verify/approve after first login.
   /// </summary>
+  /// <param name="action">
+  /// Inbox <c>action</c> flag: 1 = show verify/approve (default), 0 = hide action buttons.
+  /// </param>
   Task<WorkflowInboxShareAssignmentResult> AssignOpenInboxToUserAsync(
       Guid workflowInstanceId,
       Guid guestUserId,
       Guid modifiedByUserId,
+      int action = 1,
       CancellationToken cancellationToken = default);
 }
 
