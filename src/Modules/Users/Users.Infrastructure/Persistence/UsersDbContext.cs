@@ -73,6 +73,7 @@ public sealed class UsersDbContext : DbContext
             entity.Property(e => e.IdCardPath).HasMaxLength(512);
             entity.Property(e => e.SignaturePath).HasMaxLength(512);
             entity.Property(e => e.UiPreference).HasMaxLength(512);
+            entity.Property(e => e.Configuration).HasDefaultValue(0);
             entity.Property(e => e.ModifiedAtUtc);
         });
 

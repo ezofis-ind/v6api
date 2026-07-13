@@ -24,7 +24,8 @@ public sealed class AuthLookupController : ControllerBase
     /// <summary>
     /// Returns organizations (tenants) for an email. Call this on the login page after user enters email.
     /// No auth required. If one tenant: show password field. If multiple: show org picker, then password.
-    /// Use returned tenantId as X-Tenant-Id when calling POST /api/auth/ezofis/login.
+    /// Use the selected tenantId as X-Tenant-Id (GUID) when calling POST /api/auth/ezofis/login.
+    /// Do not treat multiple tenants as an error — the user must pick one organization.
     /// </summary>
     [HttpGet("tenants")]
     [ProducesResponseType(typeof(TenantLookupResponse), StatusCodes.Status200OK)]
@@ -34,30 +35,34 @@ public sealed class AuthLookupController : ControllerBase
         if (string.IsNullOrWhiteSpace(email))
             return BadRequest(new { error = "Email is required." });
 
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+
         try
         {
             await using var context = await _catalogFactory.CreateDbContextAsync(cancellationToken);
-            var items = await context.UserTenants
-                .AsNoTracking()
-                .Where(ut => ut.Email == email.Trim())
-                .Join(
-                    context.Tenants.Where(t => t.IsActive),
-                    ut => ut.TenantId,
-                    t => t.Id,
-                    (ut, t) => new TenantLookupItem(t.Id, t.Name, ut.Role))
+            var items = await (
+                    from ut in context.UserTenants.AsNoTracking()
+                    join t in context.Tenants.AsNoTracking() on ut.TenantId equals t.Id
+                    where t.IsActive && ut.Email.ToLower() == normalizedEmail
+                    orderby t.Name
+                    select new TenantLookupItem(t.Id, t.Name, ut.Role))
                 .ToListAsync(cancellationToken);
 
-            return Ok(new TenantLookupResponse(items));
+            return Ok(new TenantLookupResponse(
+                items,
+                RequiresOrgSelection: items.Count > 1));
         }
         catch (SqlException ex) when (ex.Number == SqlErrorInvalidObjectName)
         {
-            return Ok(new TenantLookupResponse(Array.Empty<TenantLookupItem>()));
+            return Ok(new TenantLookupResponse(Array.Empty<TenantLookupItem>(), RequiresOrgSelection: false));
         }
     }
 }
 
-/// <summary>Organizations the email belongs to.</summary>
-public record TenantLookupResponse(IReadOnlyList<TenantLookupItem> Tenants);
+/// <summary>Organizations the email belongs to. When <see cref="RequiresOrgSelection"/> is true, show an org picker before login.</summary>
+public record TenantLookupResponse(
+    IReadOnlyList<TenantLookupItem> Tenants,
+    bool RequiresOrgSelection = false);
 
 /// <summary>Organization with tenantId for X-Tenant-Id header.</summary>
 public record TenantLookupItem(Guid TenantId, string Name, string Role);

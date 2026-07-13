@@ -352,6 +352,11 @@ namespace SaaSApp.Users.Infrastructure.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
 
+                    b.Property<int>("Configuration")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
                     b.Property<string>("UserType")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");

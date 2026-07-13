@@ -99,6 +99,12 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
         if (provisionGuestUser)
             await _guestProvisioning.EnsureGuestUserAsync(sourceTenantId, recipientEmail, cancellationToken);
 
+        // Existing tenant users (password/social already set) → isnew=false (skip set-password page).
+        // New / incomplete guests → isnew=true.
+        var inviteAuth = await _guestProvisioning.GetShareInviteAuthInfoAsync(
+            sourceTenantId, recipientEmail, cancellationToken);
+        var isNew = inviteAuth.RequiresPasswordSetup;
+
         var shareToken = GenerateShareToken();
         var expiresAt = DateTime.UtcNow.AddDays(_options.DefaultExpiryDays <= 0 ? 30 : _options.DefaultExpiryDays);
         var shareId = Guid.NewGuid();
@@ -126,7 +132,7 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
             await catalog.SaveChangesAsync(cancellationToken);
         }
 
-        var shareUrl = BuildShareUrl(shareToken, recipientEmail);
+        var shareUrl = BuildShareUrl(shareToken, recipientEmail, isNew);
         await TrySendShareEmailAsync(
             recipientEmail,
             item.FileName,
@@ -327,6 +333,31 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
         return true;
     }
 
+    public async Task<Guid?> GetActiveWorkflowShareOwnerUserIdAsync(
+        Guid workflowInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        if (workflowInstanceId == Guid.Empty)
+            return null;
+
+        await RepositoryItemShareCatalogStore.EnsureTableAsync(_catalogFactory, cancellationToken);
+
+        await using var catalog = await _catalogFactory.CreateDbContextAsync(cancellationToken);
+        var now = DateTime.UtcNow;
+        var ownerId = await catalog.RepositoryItemShares
+            .AsNoTracking()
+            .Where(s =>
+                s.WorkflowInstanceId == workflowInstanceId
+                && s.Status == ShareStatuses.Active
+                && s.AutoProvisionGuest
+                && s.ExpiresAtUtc > now)
+            .OrderByDescending(s => s.CreatedAtUtc)
+            .Select(s => (Guid?)s.SharedByUserId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return ownerId is Guid id && id != Guid.Empty ? id : null;
+    }
+
     private async Task<RepositoryItemShare?> LoadActiveShareAsync(
         string shareToken,
         CancellationToken cancellationToken,
@@ -390,7 +421,7 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
             .FirstOrDefaultAsync(cancellationToken);
     }
 
-    private string BuildShareUrl(string shareToken, string recipientEmail)
+    private string BuildShareUrl(string shareToken, string recipientEmail, bool isNew)
     {
         var baseUrl = (_options.FrontendBaseUrl ?? "").Trim().TrimEnd('/');
         if (string.IsNullOrEmpty(baseUrl))
@@ -401,7 +432,8 @@ public sealed class RepositoryItemShareService : IRepositoryItemShareService
             signInPath = "/" + signInPath;
 
         var emailQuery = Uri.EscapeDataString(recipientEmail);
-        return $"{baseUrl}{signInPath}?shareToken={Uri.EscapeDataString(shareToken)}&email={emailQuery}";
+        var isNewQuery = isNew ? "true" : "false";
+        return $"{baseUrl}{signInPath}?shareToken={Uri.EscapeDataString(shareToken)}&email={emailQuery}&isnew={isNewQuery}";
     }
 
     private async Task TrySendShareEmailAsync(

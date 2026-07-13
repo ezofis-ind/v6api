@@ -11,7 +11,12 @@ public sealed record CreateWorkflowInboxShareRequest(
     string Email,
     Guid RepositoryId,
     Guid ItemId,
-    string? Message = null);
+    string? Message = null,
+    /// <summary>
+    /// Inbox action flag for the shared ticket: <c>1</c> (default) = show verify/approve buttons,
+    /// <c>0</c> = hide action buttons in the UI.
+    /// </summary>
+    int Action = 1);
 
 public sealed record CreateRepositoryItemShareResult(
     Guid ShareId,
@@ -112,5 +117,13 @@ public interface IRepositoryItemShareService
         Guid shareId,
         Guid sourceTenantId,
         Guid userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Active workflow inbox share owner for an instance, if any.
+    /// Used to keep the sharer on inbox while the guest holds the task, and to return the next step to the owner.
+    /// </summary>
+    Task<Guid?> GetActiveWorkflowShareOwnerUserIdAsync(
+        Guid workflowInstanceId,
         CancellationToken cancellationToken = default);
 }

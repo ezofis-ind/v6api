@@ -38,4 +38,7 @@ IF COL_LENGTH('users.Users', 'GroupName') IS NULL
 IF COL_LENGTH('users.Users', 'MfaMethods') IS NULL
     ALTER TABLE [users].[Users] ADD [MfaMethods] nvarchar(64) NULL;
 
+IF COL_LENGTH('users.Users', 'Configuration') IS NULL
+    ALTER TABLE [users].[Users] ADD [Configuration] int NOT NULL CONSTRAINT [DF_users_Users_Configuration] DEFAULT 0;
+
 PRINT 'Extended user columns ensured on [users].[Users].';

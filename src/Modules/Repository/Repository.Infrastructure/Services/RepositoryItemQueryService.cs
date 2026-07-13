@@ -145,6 +145,8 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
                 list.Add(RepositoryItemListReader.ReadRow(reader, tableColumns, repo));
         }
 
+        await RepositoryItemWorkflowStatusEnricher.EnrichListAsync(connection, list, cancellationToken);
+
         string? nextCursor = null;
         if (list.Count == pageSize)
         {
@@ -240,13 +242,25 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
             fields[name] = reader.IsDBNull(i) ? null : reader.GetValue(i);
         }
 
+        await reader.CloseAsync();
+
+        if (fields.TryGetValue("WorkflowInstanceId", out var wfRaw)
+            && wfRaw is Guid wfId
+            && wfId != Guid.Empty)
+        {
+            var workflowStatus = await RepositoryItemWorkflowStatusEnricher.ResolveStatusAsync(
+                connection, wfId, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(workflowStatus))
+                fields["Status"] = workflowStatus;
+        }
+
         return new RepositoryItemDetailDto(
-            reader.GetGuid(reader.GetOrdinal("Id")),
-            reader.IsDBNull(reader.GetOrdinal("FileName")) ? null : reader.GetString(reader.GetOrdinal("FileName")),
-            reader.IsDBNull(reader.GetOrdinal("FilePath")) ? null : reader.GetString(reader.GetOrdinal("FilePath")),
-            reader.IsDBNull(reader.GetOrdinal("FileType")) ? null : reader.GetString(reader.GetOrdinal("FileType")),
-            reader.IsDBNull(reader.GetOrdinal("FileSize")) ? null : reader.GetInt32(reader.GetOrdinal("FileSize")),
-            reader.GetGuid(reader.GetOrdinal("StorageProviderId")),
+            Guid.Parse(fields["Id"]!.ToString()!),
+            fields.TryGetValue("FileName", out var fn) ? fn as string : null,
+            fields.TryGetValue("FilePath", out var fp) ? fp as string : null,
+            fields.TryGetValue("FileType", out var ft) ? ft as string : null,
+            fields.TryGetValue("FileSize", out var fs) && fs is int fileSize ? fileSize : fs is long fileSizeL ? (int)fileSizeL : null,
+            (Guid)fields["StorageProviderId"]!,
             providerCode,
             fields);
     }

@@ -64,9 +64,11 @@ public sealed record LegacyMailboxRowDto(
     int? AttachmentCount,
     string? ActivityUserEmail,
     string? ActivityGroupName,
-  string? AgentValidationWorkflowId = null,
+    string? AgentValidationWorkflowId = null,
     string? AgentResponse = null,
-    string? AgentHtml = null);
+    string? AgentHtml = null,
+    /// <summary>1 = show verify/approve buttons; 0 = hide. Default 1.</summary>
+    int Action = 1);
 
 public sealed record LegacyMailboxInstanceCountRequest(
     Guid WorkflowId,

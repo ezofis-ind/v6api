@@ -9,6 +9,7 @@ using SaaSApp.MultiTenancy;
 using SaaSApp.Users.Domain.Entities;
 using SaaSApp.Repository.Application.Contracts;
 using SaaSApp.ActivityLog.Application.Contracts;
+using SaaSApp.ActivityLog.Infrastructure.Options;
 using SaaSApp.Users.Infrastructure.Persistence;
 
 namespace SaaSApp.Api.Services;
@@ -49,6 +50,7 @@ public sealed class TenantSignupService : ITenantSignupService
     private readonly IRepositorySchemaService _repositorySchema;
     private readonly IRepositoryStorageSeedService _repositoryStorageSeed;
     private readonly IActivityLogSchemaService _activityLogSchema;
+    private readonly ActivityLogOptions _activityLogOptions;
     private readonly TenantPilotUserOptions _pilotUserOptions;
     private readonly TenantDefaultCreditOptions _defaultCreditOptions;
 
@@ -60,6 +62,7 @@ public sealed class TenantSignupService : ITenantSignupService
         IRepositorySchemaService repositorySchema,
         IRepositoryStorageSeedService repositoryStorageSeed,
         IActivityLogSchemaService activityLogSchema,
+        IOptions<ActivityLogOptions> activityLogOptions,
         IOptions<TenantPilotUserOptions> pilotUserOptions,
         IOptions<TenantDefaultCreditOptions> defaultCreditOptions)
     {
@@ -70,6 +73,7 @@ public sealed class TenantSignupService : ITenantSignupService
         _repositorySchema = repositorySchema;
         _repositoryStorageSeed = repositoryStorageSeed;
         _activityLogSchema = activityLogSchema;
+        _activityLogOptions = activityLogOptions.Value;
         _pilotUserOptions = pilotUserOptions.Value;
         _defaultCreditOptions = defaultCreditOptions.Value;
     }
@@ -97,9 +101,6 @@ public sealed class TenantSignupService : ITenantSignupService
             var exists = await catalog.Tenants.AnyAsync(t => t.Id == tenantId, cancellationToken);
             if (exists)
                 throw new InvalidOperationException("Tenant already registered with this Id.");
-            var nameExists = await catalog.Tenants.AnyAsync(t => t.Name == displayName, cancellationToken);
-            if (nameExists)
-                throw new InvalidOperationException("Tenant name already exists. Please use a different organization/name.");
 
             dbName = request.DatabaseName?.Trim() ?? "";
             if (string.IsNullOrEmpty(dbName))
@@ -125,7 +126,8 @@ public sealed class TenantSignupService : ITenantSignupService
             await ApplyUsersMigrationsAsync(tenantConnectionString, tenantId, cancellationToken);
         await ApplyWorkflowSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositorySchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
-        await _activityLogSchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
+        if (_activityLogOptions.Enabled)
+            await _activityLogSchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositoryStorageSeed.EnsureDefaultProvidersAsync(tenantConnectionString, tenantId, null, cancellationToken);
 
         // Old licenseType intent:
@@ -160,7 +162,10 @@ public sealed class TenantSignupService : ITenantSignupService
             }
             catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("IX_Tenants_Name", StringComparison.OrdinalIgnoreCase) == true)
             {
-                throw new InvalidOperationException("Tenant name already exists. Please use a different organization/name.");
+                // Unique org name was removed; if an old catalog DB still has IX_Tenants_Name, guide operator to drop it.
+                throw new InvalidOperationException(
+                    "Organization name unique constraint still exists on catalog.Tenants (IX_Tenants_Name). " +
+                    "Run scripts/DropTenantsNameUniqueConstraint.sql, then retry signup. Same organization name is allowed on multiple tenants.");
             }
 
             await SeedDefaultCreditMasterAsync(catalog, tenantId, cancellationToken);

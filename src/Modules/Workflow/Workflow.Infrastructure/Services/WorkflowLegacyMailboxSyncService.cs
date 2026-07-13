@@ -65,7 +65,8 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
     public async Task SyncTransactionRowAsync(
         Guid workflowId,
         int transactionRowId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? inboxAction = null)
     {
         var connectionString = _tenantContext.ConnectionString;
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -73,7 +74,7 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
 
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-        await SyncTransactionRowAsync(workflowId, transactionRowId, connection, formOverride: null, cancellationToken);
+        await SyncTransactionRowAsync(workflowId, transactionRowId, connection, formOverride: null, cancellationToken, inboxAction);
     }
 
     public async Task SyncInstanceEndTransactionsAsync(
@@ -101,7 +102,9 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
 
         MailboxFormSnapshot? formOverride = null,
 
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+
+        int? inboxAction = null)
 
     {
 
@@ -113,7 +116,7 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
 
 
 
-        await SyncTransactionRowCoreAsync(workflowId, transactionRowId, connection, formOverride, cancellationToken);
+        await SyncTransactionRowCoreAsync(workflowId, transactionRowId, connection, formOverride, cancellationToken, inboxAction);
 
     }
 
@@ -197,7 +200,7 @@ WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0 AND UPPER(LTRIM
 
         foreach (var id in ids)
 
-            await SyncTransactionRowCoreAsync(workflowId, id, connection, formOverride, cancellationToken);
+            await SyncTransactionRowCoreAsync(workflowId, id, connection, formOverride, cancellationToken, inboxAction: null);
 
     }
 
@@ -213,7 +216,9 @@ WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0 AND UPPER(LTRIM
 
         MailboxFormSnapshot? formOverride,
 
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+
+        int? inboxAction = null)
 
     {
 
@@ -243,7 +248,9 @@ SELECT
 
     t.IsDeleted,
 
-    t.ActivityUserId
+    t.ActivityUserId,
+
+    t.ModifiedBy
 
 FROM {transactionTable} t
 
@@ -264,6 +271,8 @@ WHERE t.Id = @TransactionRowId;";
         bool isDeleted;
 
         Guid? activityUserId;
+
+        Guid? modifiedByUserId;
 
 
 
@@ -294,6 +303,8 @@ WHERE t.Id = @TransactionRowId;";
             isDeleted = reader.GetBoolean(5);
 
             activityUserId = reader.IsDBNull(6) ? null : reader.GetGuid(6);
+
+            modifiedByUserId = reader.IsDBNull(7) ? null : reader.GetGuid(7);
 
         }
 
@@ -354,6 +365,25 @@ WHERE t.Id = @TransactionRowId;";
                 assigneeId,
                 cancellationToken);
 
+        // Share-file: keep sharer (ModifiedBy) on inbox while guest (ActivityUserId) holds the open task.
+        if (targetTable == inboxTable
+            && modifiedByUserId is Guid shareOwnerId
+            && shareOwnerId != Guid.Empty
+            && activityUserId is Guid guestId
+            && guestId != Guid.Empty
+            && shareOwnerId != guestId)
+        {
+            await DeleteSentRowsForInstanceAndUserAsync(
+                connection,
+                workflowIdValue,
+                workflowIdCompact,
+                workflowInstanceId,
+                workflowInstanceIdStr,
+                sentTable,
+                shareOwnerId,
+                cancellationToken);
+        }
+
 
 
         var txIdStr = transactionGuid is { } g && g != Guid.Empty
@@ -373,6 +403,7 @@ WHERE t.Id = @TransactionRowId;";
 
 
         var sourceSql = BuildMailboxSourceSelect(transactionTable, instancesTable);
+        var resolvedAction = inboxAction == 0 ? 0 : 1;
 
         var insertSql = $@"
 
@@ -385,32 +416,53 @@ INSERT INTO {targetTable}
      transaction_createdAt, transaction_createdBy, transaction_createdByEmail,
 
      transaction_modifiedAt, transaction_modifiedBy, activityUserEmail,
-     repositoryId, itemId, formId, formEntryId, formData)
+     repositoryId, itemId, formId, formEntryId, formData, [action])
 
 {sourceSql};";
 
 
 
-        await using var insertCmd = new SqlCommand(insertSql, connection);
+        await using (var insertCmd = new SqlCommand(insertSql, connection))
+        {
+            insertCmd.Parameters.AddWithValue("@WorkflowGuid", workflowId);
+            insertCmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
+            insertCmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+            insertCmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
+            insertCmd.Parameters.AddWithValue("@TransactionRowId", transactionRowId);
+            insertCmd.Parameters.AddWithValue("@TxGuidStr", txIdStr);
+            insertCmd.Parameters.AddWithValue("@OverrideUserId", DBNull.Value);
+            insertCmd.Parameters.AddWithValue("@Action", resolvedAction);
+            insertCmd.Parameters.AddWithValue("@RepositoryId", (object?)extras.RepositoryId?.ToString("D") ?? DBNull.Value);
+            insertCmd.Parameters.AddWithValue("@ItemId", (object?)extras.ItemId?.ToString("D") ?? DBNull.Value);
+            insertCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
+            insertCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
+            insertCmd.Parameters.AddWithValue("@FormData", (object?)extras.FormData ?? DBNull.Value);
+            await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
 
-        insertCmd.Parameters.AddWithValue("@WorkflowGuid", workflowId);
-
-        insertCmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
-
-        insertCmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
-
-        insertCmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
-
-        insertCmd.Parameters.AddWithValue("@TransactionRowId", transactionRowId);
-
-        insertCmd.Parameters.AddWithValue("@TxGuidStr", txIdStr);
-        insertCmd.Parameters.AddWithValue("@RepositoryId", (object?)extras.RepositoryId?.ToString("D") ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("@ItemId", (object?)extras.ItemId?.ToString("D") ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
-        insertCmd.Parameters.AddWithValue("@FormData", (object?)extras.FormData ?? DBNull.Value);
-
-        await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+        if (targetTable == inboxTable
+            && modifiedByUserId is Guid ownerCcId
+            && ownerCcId != Guid.Empty
+            && activityUserId is Guid openAssigneeId
+            && openAssigneeId != Guid.Empty
+            && ownerCcId != openAssigneeId)
+        {
+            await using var ccCmd = new SqlCommand(insertSql, connection);
+            ccCmd.Parameters.AddWithValue("@WorkflowGuid", workflowId);
+            ccCmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
+            ccCmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+            ccCmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
+            ccCmd.Parameters.AddWithValue("@TransactionRowId", transactionRowId);
+            ccCmd.Parameters.AddWithValue("@TxGuidStr", txIdStr);
+            ccCmd.Parameters.AddWithValue("@OverrideUserId", ownerCcId.ToString("D"));
+            ccCmd.Parameters.AddWithValue("@Action", resolvedAction);
+            ccCmd.Parameters.AddWithValue("@RepositoryId", (object?)extras.RepositoryId?.ToString("D") ?? DBNull.Value);
+            ccCmd.Parameters.AddWithValue("@ItemId", (object?)extras.ItemId?.ToString("D") ?? DBNull.Value);
+            ccCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
+            ccCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
+            ccCmd.Parameters.AddWithValue("@FormData", (object?)extras.FormData ?? DBNull.Value);
+            await ccCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
 
     }
 
@@ -424,7 +476,7 @@ INSERT INTO {targetTable}
 
     SELECT
 
-        CONVERT(NVARCHAR(100), t.ActivityUserId) AS userId,
+        COALESCE(@OverrideUserId, CONVERT(NVARCHAR(100), t.ActivityUserId)) AS userId,
 
         t.ActivityGroupId AS groupId,
 
@@ -476,7 +528,9 @@ INSERT INTO {targetTable}
 
         @FormEntryId AS formEntryId,
 
-        @FormData AS formData
+        @FormData AS formData,
+
+        @Action AS [action]
 
     FROM {transactionTable} t
 

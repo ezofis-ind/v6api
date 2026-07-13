@@ -4,11 +4,14 @@ using System.Text.Json.Serialization;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using SaaSApp.ActivityLog.Application.Contracts;
+using SaaSApp.ActivityLog.Infrastructure.Options;
 using SaaSApp.Catalog;
 using SaaSApp.MultiTenancy;
 using SaaSApp.Security;
 using SaaSApp.Users.Application.Contracts;
+using SaaSApp.Users.Application.Users.Commands.CompleteUserConfiguration;
 using SaaSApp.Users.Application.Users.Commands.CreateUser;
 using SaaSApp.Users.Application.Users.Commands.DeleteUser;
 using SaaSApp.Users.Application.Users.Commands.UpdateUser;
@@ -46,17 +49,20 @@ public sealed class UsersController : ControllerBase
     private readonly ITenantContext _tenantContext;
     private readonly IUserTenantRegistry _userTenantRegistry;
     private readonly IActivityLogQueryService _activityLogQuery;
+    private readonly ActivityLogOptions _activityLogOptions;
 
     public UsersController(
         IMediator mediator,
         ITenantContext tenantContext,
         IUserTenantRegistry userTenantRegistry,
-        IActivityLogQueryService activityLogQuery)
+        IActivityLogQueryService activityLogQuery,
+        IOptions<ActivityLogOptions> activityLogOptions)
     {
         _mediator = mediator;
         _tenantContext = tenantContext;
         _userTenantRegistry = userTenantRegistry;
         _activityLogQuery = activityLogQuery;
+        _activityLogOptions = activityLogOptions.Value;
     }
 
     /// <summary>Create a new user in the current tenant. Admin only. Optionally set password for Ezofis login.</summary>
@@ -422,6 +428,33 @@ public sealed class UsersController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Mark user onboarding configuration as completed (Configuration = 1).</summary>
+    [HttpPost("{userId:guid}/configuration")]
+    [ProducesResponseType(typeof(UserConfigurationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CompleteConfiguration(
+        Guid userId,
+        [FromBody] CompleteUserConfigurationRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!CanAccessUserProfile(userId))
+            return Forbid();
+
+        var result = await _mediator.Send(
+            new CompleteUserConfigurationCommand(userId, request.Message ?? string.Empty),
+            cancellationToken);
+
+        if (!string.IsNullOrEmpty(result.Error))
+            return BadRequest(new { error = result.Error });
+
+        if (!result.Found)
+            return NotFound(new { error = "User not found in this tenant." });
+
+        return Ok(new UserConfigurationResponse(userId, result.Configuration, request.Message));
+    }
+
     /// <summary>Save onboarding pre-questions and answers as JSON in catalog.UserTenants for the user.</summary>
     [HttpPut("{userId:guid}/pre-questions")]
     [ProducesResponseType(typeof(UserPreQuestionsResponse), StatusCodes.Status200OK)]
@@ -544,9 +577,10 @@ public sealed class UsersController : ControllerBase
         return NoContent();
     }
 
-    /// <summary>Paginated API access history for a user. Admin only.</summary>
+    /// <summary>Paginated API access history for a user. Admin only. Disabled while ActivityLog:Enabled is false.</summary>
     [HttpGet("{id:guid}/activity-logs")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ApiExplorerSettings(IgnoreApi = true)]
     [ProducesResponseType(typeof(PagedResult<ActivityLogEntryDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<ActivityLogEntryDto>>> GetActivityLogs(
         Guid id,
@@ -559,6 +593,9 @@ public sealed class UsersController : ControllerBase
         [FromQuery] DateTime? dateTo = null,
         CancellationToken cancellationToken = default)
     {
+        if (!_activityLogOptions.Enabled)
+            return NotFound();
+
         var tenantId = _tenantContext.TenantId;
         if (tenantId == null)
             return BadRequest(new { error = "Tenant not resolved." });
@@ -731,3 +768,9 @@ public record SetRoleMenusRequest(IReadOnlyList<Guid> Menus, Guid? DefaultLandin
 
 /// <summary>Onboarding pre-questions to store in catalog.UserTenants.PreQuestionsJson.</summary>
 public record UpdateUserPreQuestionsRequest(IReadOnlyList<PreQuestionAnswerDto> Questions);
+
+/// <summary>Mark onboarding configuration complete. Message must be <c>configuration:completed</c>.</summary>
+public record CompleteUserConfigurationRequest(string Message);
+
+/// <summary>User configuration flag after update (0 = pending, 1 = completed).</summary>
+public record UserConfigurationResponse(Guid UserId, int Configuration, string? Message);
