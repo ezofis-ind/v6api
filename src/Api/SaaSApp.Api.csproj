@@ -49,6 +49,8 @@
     <ProjectReference Include="..\Modules\Dms\Dms.Infrastructure\SaaSApp.Dms.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Repository\Repository.Application\SaaSApp.Repository.Application.csproj" />
     <ProjectReference Include="..\Modules\Repository\Repository.Infrastructure\SaaSApp.Repository.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\ActivityLog\ActivityLog.Application\SaaSApp.ActivityLog.Application.csproj" />
+    <ProjectReference Include="..\Modules\ActivityLog\ActivityLog.Infrastructure\SaaSApp.ActivityLog.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
