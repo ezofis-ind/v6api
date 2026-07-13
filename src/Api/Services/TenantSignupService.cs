@@ -8,6 +8,7 @@ using SaaSApp.Catalog.Persistence;
 using SaaSApp.MultiTenancy;
 using SaaSApp.Users.Domain.Entities;
 using SaaSApp.Repository.Application.Contracts;
+using SaaSApp.ActivityLog.Application.Contracts;
 using SaaSApp.Users.Infrastructure.Persistence;
 
 namespace SaaSApp.Api.Services;
@@ -47,6 +48,7 @@ public sealed class TenantSignupService : ITenantSignupService
     private readonly IUserTenantRegistry _userTenantRegistry;
     private readonly IRepositorySchemaService _repositorySchema;
     private readonly IRepositoryStorageSeedService _repositoryStorageSeed;
+    private readonly IActivityLogSchemaService _activityLogSchema;
     private readonly TenantPilotUserOptions _pilotUserOptions;
     private readonly TenantDefaultCreditOptions _defaultCreditOptions;
 
@@ -57,6 +59,7 @@ public sealed class TenantSignupService : ITenantSignupService
         IUserTenantRegistry userTenantRegistry,
         IRepositorySchemaService repositorySchema,
         IRepositoryStorageSeedService repositoryStorageSeed,
+        IActivityLogSchemaService activityLogSchema,
         IOptions<TenantPilotUserOptions> pilotUserOptions,
         IOptions<TenantDefaultCreditOptions> defaultCreditOptions)
     {
@@ -66,6 +69,7 @@ public sealed class TenantSignupService : ITenantSignupService
         _userTenantRegistry = userTenantRegistry;
         _repositorySchema = repositorySchema;
         _repositoryStorageSeed = repositoryStorageSeed;
+        _activityLogSchema = activityLogSchema;
         _pilotUserOptions = pilotUserOptions.Value;
         _defaultCreditOptions = defaultCreditOptions.Value;
     }
@@ -121,6 +125,7 @@ public sealed class TenantSignupService : ITenantSignupService
             await ApplyUsersMigrationsAsync(tenantConnectionString, tenantId, cancellationToken);
         await ApplyWorkflowSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositorySchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
+        await _activityLogSchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositoryStorageSeed.EnsureDefaultProvidersAsync(tenantConnectionString, tenantId, null, cancellationToken);
 
         // Old licenseType intent:

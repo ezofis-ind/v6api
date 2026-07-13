@@ -25,6 +25,8 @@ using System.Reflection;
 using SaaSApp.BlobStorage;
 using SaaSApp.Repository.Application;
 using SaaSApp.Repository.Infrastructure;
+using SaaSApp.ActivityLog.Application;
+using SaaSApp.ActivityLog.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -164,6 +166,8 @@ builder.Services.AddDmsInfrastructure();
 builder.Services.AddEzofisBlobStorage(builder.Configuration);
 builder.Services.AddRepositoryApplication();
 builder.Services.AddRepositoryInfrastructure(builder.Configuration);
+builder.Services.AddActivityLogApplication();
+builder.Services.AddActivityLogInfrastructure(builder.Configuration);
 
 // Hangfire (background jobs)
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -297,6 +301,8 @@ app.UseMiddleware<UsersPermissionSchemaEnsuringMiddleware>();
 app.UseMiddleware<WorkflowSchemaEnsuringMiddleware>();
 app.UseMiddleware<DmsSchemaEnsuringMiddleware>();
 app.UseMiddleware<RepositorySchemaEnsuringMiddleware>();
+app.UseMiddleware<ActivityLogSchemaEnsuringMiddleware>();
+app.UseMiddleware<ApiActivityLoggingMiddleware>();
 
 app.MapControllers();
 app.MapHealthChecks("/health");

@@ -10,7 +10,10 @@ internal static class TenantSignupOtpPathHelper
     internal static bool Matches(HttpContext context)
     {
         var path = context.Request.Path.Value ?? string.Empty;
-        return path.Equals("/api/tenant/checkAuthenticate", StringComparison.OrdinalIgnoreCase)
-            || path.Equals("/api/tenant/validateOTP", StringComparison.OrdinalIgnoreCase);
+        return MatchesPath(path);
     }
+
+    internal static bool MatchesPath(string path) =>
+        path.Equals("/api/tenant/checkAuthenticate", StringComparison.OrdinalIgnoreCase)
+            || path.Equals("/api/tenant/validateOTP", StringComparison.OrdinalIgnoreCase);
 }

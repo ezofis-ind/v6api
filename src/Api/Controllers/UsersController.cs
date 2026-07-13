@@ -4,7 +4,9 @@ using System.Text.Json.Serialization;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SaaSApp.ActivityLog.Application.Contracts;
 using SaaSApp.Catalog;
+using SaaSApp.MultiTenancy;
 using SaaSApp.Security;
 using SaaSApp.Users.Application.Contracts;
 using SaaSApp.Users.Application.Users.Commands.CreateUser;
@@ -43,12 +45,18 @@ public sealed class UsersController : ControllerBase
     private readonly IMediator _mediator;
     private readonly ITenantContext _tenantContext;
     private readonly IUserTenantRegistry _userTenantRegistry;
+    private readonly IActivityLogQueryService _activityLogQuery;
 
-    public UsersController(IMediator mediator, ITenantContext tenantContext, IUserTenantRegistry userTenantRegistry)
+    public UsersController(
+        IMediator mediator,
+        ITenantContext tenantContext,
+        IUserTenantRegistry userTenantRegistry,
+        IActivityLogQueryService activityLogQuery)
     {
         _mediator = mediator;
         _tenantContext = tenantContext;
         _userTenantRegistry = userTenantRegistry;
+        _activityLogQuery = activityLogQuery;
     }
 
     /// <summary>Create a new user in the current tenant. Admin only. Optionally set password for Ezofis login.</summary>
@@ -534,6 +542,30 @@ public sealed class UsersController : ControllerBase
         if (!result.Found)
             return NotFound();
         return NoContent();
+    }
+
+    /// <summary>Paginated API access history for a user. Admin only.</summary>
+    [HttpGet("{id:guid}/activity-logs")]
+    [Authorize(Policy = AuthorizationPolicies.Admin)]
+    [ProducesResponseType(typeof(PagedResult<ActivityLogEntryDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<ActivityLogEntryDto>>> GetActivityLogs(
+        Guid id,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? method = null,
+        [FromQuery] string? path = null,
+        [FromQuery] int? statusCode = null,
+        [FromQuery] DateTime? dateFrom = null,
+        [FromQuery] DateTime? dateTo = null,
+        CancellationToken cancellationToken = default)
+    {
+        var tenantId = _tenantContext.TenantId;
+        if (tenantId == null)
+            return BadRequest(new { error = "Tenant not resolved." });
+
+        var query = new ListActivityLogsQuery(page, pageSize, id, method, path, statusCode, dateFrom, dateTo);
+        var result = await _activityLogQuery.ListAsync(tenantId.Value, query, cancellationToken);
+        return Ok(result);
     }
 
     private Guid? GetCurrentUserId()
