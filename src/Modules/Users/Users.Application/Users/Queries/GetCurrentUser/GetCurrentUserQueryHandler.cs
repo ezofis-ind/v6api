@@ -1,5 +1,6 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
+using SaaSApp.Users.Application.Roles;
 using SaaSApp.Users.Application.Users;
 
 namespace SaaSApp.Users.Application.Users.Queries.GetCurrentUser;
@@ -32,7 +33,7 @@ public sealed class GetCurrentUserQueryHandler : IRequestHandler<GetCurrentUserQ
             request.UserId,
             user.Role,
             cancellationToken);
-        var (permissionCount, groupedPermissions) = await UserPermissionMapper.MapGroupedAsync(
+        var (permissionCount, groupedPermissions) = await PermissionVisibilityMapper.MapAsync(
             permissionKeys,
             _categoryRepository,
             cancellationToken);

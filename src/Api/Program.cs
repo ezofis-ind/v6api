@@ -30,6 +30,11 @@ using SaaSApp.ActivityLog.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Independent overlays: toggle ActivityLog:Enabled / EventLog:Enabled per file.
+builder.Configuration
+    .AddJsonFile("appsettings.ActivityLog.json", optional: true, reloadOnChange: true)
+    .AddJsonFile("appsettings.EventLog.json", optional: true, reloadOnChange: true);
+
 // Serilog + Application Insights (clear default providers to avoid duplicate log lines)
 builder.Logging.ClearProviders();
 builder.AddSaaSAppLogging();
@@ -301,8 +306,15 @@ app.UseMiddleware<UsersPermissionSchemaEnsuringMiddleware>();
 app.UseMiddleware<WorkflowSchemaEnsuringMiddleware>();
 app.UseMiddleware<DmsSchemaEnsuringMiddleware>();
 app.UseMiddleware<RepositorySchemaEnsuringMiddleware>();
-app.UseMiddleware<ActivityLogSchemaEnsuringMiddleware>();
-app.UseMiddleware<ApiActivityLoggingMiddleware>();
+
+var activityLogEnabled = builder.Configuration.GetValue("ActivityLog:Enabled", false);
+var eventLogEnabled = builder.Configuration.GetValue("EventLog:Enabled", true);
+if (activityLogEnabled || eventLogEnabled)
+    app.UseMiddleware<ActivityLogSchemaEnsuringMiddleware>();
+if (activityLogEnabled)
+    app.UseMiddleware<ApiActivityLoggingMiddleware>();
+if (eventLogEnabled)
+    app.UseMiddleware<ApiEventLoggingMiddleware>();
 
 app.MapControllers();
 app.MapHealthChecks("/health");

@@ -13,10 +13,14 @@ public static class ActivityLogInfrastructureServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.Configure<ActivityLogOptions>(configuration.GetSection(ActivityLogOptions.SectionName));
+        services.Configure<EventLogOptions>(configuration.GetSection(EventLogOptions.SectionName));
         services.AddSingleton<IActivityLogWriter, ActivityLogWriter>();
         services.AddScoped<ActivityLogInsertService>();
+        services.AddSingleton<IEventLogWriter, EventLogWriter>();
+        services.AddScoped<EventLogInsertService>();
         services.AddScoped<IActivityLogSchemaService, ActivityLogSchemaService>();
         services.AddScoped<IActivityLogQueryService, ActivityLogQueryService>();
+        services.AddScoped<IEventLogQueryService, EventLogQueryService>();
         return services;
     }
 }

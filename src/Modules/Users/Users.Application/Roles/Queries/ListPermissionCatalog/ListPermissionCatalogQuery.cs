@@ -1,6 +1,6 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
-using SaaSApp.Users.Domain;
+using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 
 namespace SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 
@@ -27,19 +27,14 @@ public sealed class ListPermissionCatalogQueryHandler : IRequestHandler<ListPerm
 
     public async Task<ListPermissionCatalogQueryResult> Handle(ListPermissionCatalogQuery request, CancellationToken cancellationToken)
     {
-        var actions = PermissionActions.AllActions
-            .Select(a => new PermissionActionItem(a.Key, a.Label))
+        var categories = await _categoryRepository.ListActiveAsync(cancellationToken);
+        var rows = categories
+            .Select(category => new PermissionCategoryRow(
+                category.Key,
+                category.Name,
+                Array.Empty<PermissionMatrixItem>()))
             .ToList();
 
-        var categories = await _categoryRepository.ListActiveAsync(cancellationToken);
-        var rows = categories.Select(category => new PermissionCategoryRow(
-            category.Key,
-            category.Name,
-            actions.Select(action => new PermissionMatrixItem(
-                PermissionKeyHelper.Build(category.Key, action.Key),
-                action.Key,
-                action.Label)).ToList())).ToList();
-
-        return new ListPermissionCatalogQueryResult(actions, rows);
+        return new ListPermissionCatalogQueryResult(Array.Empty<PermissionActionItem>(), rows);
     }
 }

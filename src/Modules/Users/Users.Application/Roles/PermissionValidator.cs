@@ -1,5 +1,5 @@
 using SaaSApp.Users.Application.Contracts;
-using SaaSApp.Users.Domain;
+using SaaSApp.Users.Application.Roles;
 
 namespace SaaSApp.Users.Application.Roles;
 
@@ -14,20 +14,11 @@ public sealed class PermissionValidator : IPermissionValidator
 
     public async Task<string?> GetFirstInvalidKeyAsync(IReadOnlyList<string> permissionKeys, CancellationToken cancellationToken = default)
     {
-        var activeCategories = await _categoryRepository.ListActiveAsync(cancellationToken);
-        var activeCategoryKeys = new HashSet<string>(
-            activeCategories.Select(c => c.Key),
-            StringComparer.OrdinalIgnoreCase);
+        var (_, invalidValue) = await PermissionCategoryResolver.ResolveAsync(
+            permissionKeys,
+            _categoryRepository,
+            cancellationToken);
 
-        foreach (var key in permissionKeys)
-        {
-            if (!PermissionKeyHelper.TryParse(key, out var categoryKey, out _))
-                return key;
-
-            if (!activeCategoryKeys.Contains(categoryKey))
-                return key;
-        }
-
-        return null;
+        return invalidValue;
     }
 }

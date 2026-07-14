@@ -54,6 +54,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="appsettings.ActivityLog.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Update="appsettings.EventLog.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
     <None Update="..\..\scripts\CreateWorkflowSchemaComplete.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>scripts\CreateWorkflowSchemaComplete.sql</Link>

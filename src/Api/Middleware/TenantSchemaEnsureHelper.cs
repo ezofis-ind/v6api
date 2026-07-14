@@ -60,7 +60,7 @@ internal static class TenantSchemaEnsureHelper
             tenantId,
             "activitylog",
             connectionString,
-            "SELECT 1 FROM sys.tables WHERE name = N'ApiAccessLogs' AND schema_id = SCHEMA_ID(N'activitylog')",
+            "SELECT 1 FROM sys.tables WHERE name = N'EventLogs' AND schema_id = SCHEMA_ID(N'activitylog')",
             applySchema,
             cancellationToken);
 

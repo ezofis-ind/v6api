@@ -1,4 +1,4 @@
-using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
+using SaaSApp.Users.Application.Roles;
 using SaaSApp.Users.Domain.Entities;
 
 namespace SaaSApp.Users.Application.Users;
@@ -49,7 +49,7 @@ internal static class UserExtendedResponseMapper
         User user,
         string? managerEmail,
         int permissionCount,
-        IReadOnlyList<PermissionCategoryRow> permissionKeys)
+        IReadOnlyList<PermissionKeyItem> permissionKeys)
     {
         var response = Map(user, managerEmail);
         response.PermissionCount = permissionCount;
