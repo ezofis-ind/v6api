@@ -5,15 +5,9 @@ namespace SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 
 public record ListPermissionCatalogQuery : IRequest<ListPermissionCatalogQueryResult>;
 
-public record PermissionActionItem(string Key, string Label);
+public record PermissionCategoryCatalogItem(string Key, string Name);
 
-public record PermissionMatrixItem(string Key, string ActionKey, string ActionLabel);
-
-public record PermissionCategoryRow(string Key, string Name, IReadOnlyList<PermissionMatrixItem> Permissions);
-
-public record ListPermissionCatalogQueryResult(
-    IReadOnlyList<PermissionActionItem> Actions,
-    IReadOnlyList<PermissionCategoryRow> Categories);
+public record ListPermissionCatalogQueryResult(IReadOnlyList<PermissionCategoryCatalogItem> Categories);
 
 public sealed class ListPermissionCatalogQueryHandler : IRequestHandler<ListPermissionCatalogQuery, ListPermissionCatalogQueryResult>
 {
@@ -28,13 +22,9 @@ public sealed class ListPermissionCatalogQueryHandler : IRequestHandler<ListPerm
     {
         var categories = await _categoryRepository.ListActiveAsync(cancellationToken);
         var rows = categories
-            .Select(category => new PermissionCategoryRow(
-                category.Key,
-                category.Name,
-                Array.Empty<PermissionMatrixItem>()))
+            .Select(category => new PermissionCategoryCatalogItem(category.Key, category.Name))
             .ToList();
 
-        // Actions / matrix cells are unused for category-only role permissions; kept empty for API shape stability.
-        return new ListPermissionCatalogQueryResult(Array.Empty<PermissionActionItem>(), rows);
+        return new ListPermissionCatalogQueryResult(rows);
     }
 }

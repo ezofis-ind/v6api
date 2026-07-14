@@ -41,6 +41,8 @@ public sealed class EventLogInsertService
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
 
+        await EnsureEventLogsTableAsync(connection, cancellationToken);
+
         const string sql = """
             INSERT INTO activitylog.EventLogs (
                 Id, TenantId, UserId, UserDisplayName, UserEmail,
@@ -70,5 +72,53 @@ public sealed class EventLogInsertService
         command.Parameters.AddWithValue("@CreatedAtUtc", entry.CreatedAtUtc);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task EnsureEventLogsTableAsync(SqlConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = N'activitylog')
+                EXEC(N'CREATE SCHEMA activitylog');
+
+            IF OBJECT_ID(N'activitylog.EventLogs', N'U') IS NULL
+            BEGIN
+                CREATE TABLE activitylog.EventLogs (
+                    Id               uniqueidentifier NOT NULL CONSTRAINT PK_EventLogs PRIMARY KEY,
+                    TenantId         uniqueidentifier NOT NULL,
+                    UserId           uniqueidentifier NULL,
+                    UserDisplayName  nvarchar(256) NULL,
+                    UserEmail        nvarchar(256) NULL,
+                    EventTitle       nvarchar(512) NOT NULL,
+                    EventType        nvarchar(128) NOT NULL,
+                    Category         nvarchar(64) NOT NULL,
+                    Severity         nvarchar(32) NOT NULL,
+                    IpAddress        nvarchar(64) NULL,
+                    HttpMethod       nvarchar(10) NULL,
+                    Path             nvarchar(512) NULL,
+                    StatusCode       int NULL,
+                    CorrelationId    nvarchar(64) NULL,
+                    CreatedAtUtc     datetime2 NOT NULL
+                );
+
+                CREATE INDEX IX_EventLogs_TenantId_CreatedAtUtc
+                    ON activitylog.EventLogs (TenantId, CreatedAtUtc DESC);
+
+                CREATE INDEX IX_EventLogs_TenantId_Category_CreatedAtUtc
+                    ON activitylog.EventLogs (TenantId, Category, CreatedAtUtc DESC);
+
+                CREATE INDEX IX_EventLogs_TenantId_Severity
+                    ON activitylog.EventLogs (TenantId, Severity);
+            END
+            """;
+
+        try
+        {
+            await using var command = new SqlCommand(sql, connection) { CommandTimeout = 60 };
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (SqlException ex) when (ex.Number is 2714 or 1913 or 2705 or 2627)
+        {
+            // Idempotent: object/index already exists (concurrent create).
+        }
     }
 }

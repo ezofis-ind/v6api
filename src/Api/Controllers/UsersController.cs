@@ -150,7 +150,7 @@ public sealed class UsersController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>List permission categories for the role Permissions tab (category key + name). Admin only.</summary>
+    /// <summary>List permission categories (key + name) for the role Permissions tab. Admin only.</summary>
     [HttpGet("roles/permissions")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
     [ProducesResponseType(typeof(ListPermissionCatalogQueryResult), StatusCodes.Status200OK)]
