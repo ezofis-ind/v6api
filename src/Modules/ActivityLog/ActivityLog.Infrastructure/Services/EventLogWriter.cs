@@ -44,12 +44,12 @@ public sealed class EventLogInsertService
         const string sql = """
             INSERT INTO activitylog.EventLogs (
                 Id, TenantId, UserId, UserDisplayName, UserEmail,
-                EventTitle, EventType, Category, Severity, IpAddress,
-                HttpMethod, Path, StatusCode, CorrelationId, CreatedAtUtc)
+                EventTitle, EventType, Category, Severity,
+                IpAddress, HttpMethod, Path, StatusCode, CorrelationId, CreatedAtUtc)
             VALUES (
                 @Id, @TenantId, @UserId, @UserDisplayName, @UserEmail,
-                @EventTitle, @EventType, @Category, @Severity, @IpAddress,
-                @HttpMethod, @Path, @StatusCode, @CorrelationId, @CreatedAtUtc)
+                @EventTitle, @EventType, @Category, @Severity,
+                @IpAddress, @HttpMethod, @Path, @StatusCode, @CorrelationId, @CreatedAtUtc)
             """;
 
         await using var command = new SqlCommand(sql, connection);

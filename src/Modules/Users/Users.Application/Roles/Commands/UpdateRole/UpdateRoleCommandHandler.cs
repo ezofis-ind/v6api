@@ -85,18 +85,14 @@ public sealed class UpdateRoleCommandHandler : IRequestHandler<UpdateRoleCommand
             if (request.PermissionKeys!.Count == 0)
                 return Fail("At least one permission is required.");
 
-            var (categoryKeys, invalidPermission) = await PermissionCategoryResolver.ResolveAsync(
+            var (categoryKeys, permissionError) = await PermissionCategoryResolver.ResolveAsync(
                 request.PermissionKeys,
                 _categoryRepository,
                 cancellationToken);
+            if (permissionError != null)
+                return Fail(permissionError);
             if (categoryKeys.Count == 0)
                 return Fail("At least one permission is required.");
-            if (invalidPermission != null)
-            {
-                return invalidPermission.Contains('.')
-                    ? Fail($"Use category names only (e.g. Dashboard, workflow). Permission keys like '{invalidPermission}' are not supported.")
-                    : Fail($"Invalid permission category: '{invalidPermission}'.");
-            }
 
             role.ReplacePermissions(categoryKeys);
         }

@@ -30,10 +30,10 @@ using SaaSApp.ActivityLog.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Independent overlays: toggle ActivityLog:Enabled / EventLog:Enabled per file.
 builder.Configuration
     .AddJsonFile("appsettings.ActivityLog.json", optional: true, reloadOnChange: true)
     .AddJsonFile("appsettings.EventLog.json", optional: true, reloadOnChange: true);
+
 
 // Serilog + Application Insights (clear default providers to avoid duplicate log lines)
 builder.Logging.ClearProviders();
@@ -308,7 +308,7 @@ app.UseMiddleware<DmsSchemaEnsuringMiddleware>();
 app.UseMiddleware<RepositorySchemaEnsuringMiddleware>();
 
 var activityLogEnabled = builder.Configuration.GetValue("ActivityLog:Enabled", false);
-var eventLogEnabled = builder.Configuration.GetValue("EventLog:Enabled", true);
+var eventLogEnabled = builder.Configuration.GetValue("EventLog:Enabled", false);
 if (activityLogEnabled || eventLogEnabled)
     app.UseMiddleware<ActivityLogSchemaEnsuringMiddleware>();
 if (activityLogEnabled)

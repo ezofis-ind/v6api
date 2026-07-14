@@ -6,8 +6,8 @@ using SaaSApp.MultiTenancy;
 namespace SaaSApp.Api.Middleware;
 
 /// <summary>
-/// Ensures activity log schema exists in tenant DB before API calls that may write access/event logs.
-/// Applies once per tenant (cached). Skips when both ActivityLog and EventLog are disabled.
+/// Ensures activitylog schema (ApiAccessLogs + EventLogs) exists in the tenant DB.
+/// Applies once per tenant (cached). No-op when both ActivityLog and EventLog are disabled.
 /// </summary>
 public sealed class ActivityLogSchemaEnsuringMiddleware
 {
@@ -52,7 +52,14 @@ public sealed class ActivityLogSchemaEnsuringMiddleware
             return;
         }
 
+        // Ensure both tables (same DDL script is idempotent).
         await TenantSchemaEnsureHelper.EnsureActivityLogSchemaAsync(
+            tenantId.Value,
+            conn,
+            () => schemaService.ApplyBaseSchemaAsync(conn, context.RequestAborted),
+            context.RequestAborted);
+
+        await TenantSchemaEnsureHelper.EnsureEventLogSchemaAsync(
             tenantId.Value,
             conn,
             () => schemaService.ApplyBaseSchemaAsync(conn, context.RequestAborted),

@@ -60,6 +60,19 @@ internal static class TenantSchemaEnsureHelper
             tenantId,
             "activitylog",
             connectionString,
+            "SELECT 1 FROM sys.tables WHERE name = N'ApiAccessLogs' AND schema_id = SCHEMA_ID(N'activitylog')",
+            applySchema,
+            cancellationToken);
+
+    public static Task EnsureEventLogSchemaAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "activitylog-eventlogs",
+            connectionString,
             "SELECT 1 FROM sys.tables WHERE name = N'EventLogs' AND schema_id = SCHEMA_ID(N'activitylog')",
             applySchema,
             cancellationToken);

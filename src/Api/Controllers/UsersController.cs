@@ -119,11 +119,7 @@ public sealed class UsersController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = result.UserId }, new { userId = result.UserId });
     }
 
-    /// <summary>Current user profile and custom-role permissions (path is /api/usersession).</summary>
-    /// <remarks>
-    /// <c>permissionKeys</c> is the full category catalog with <c>key</c>, <c>name</c>, and <c>visible</c>
-    /// (true when granted to the user). <c>permissionCount</c> is the number of visible categories.
-    /// </remarks>
+    /// <summary>Current user profile and custom-role permissions (path is /api/usersession). Includes permissionCount and permissionKeys as full catalog items with visible flags.</summary>
     [HttpGet("/api/usersession")]
     [ProducesResponseType(typeof(UserExtendedResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -154,7 +150,7 @@ public sealed class UsersController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>List the permission category catalog for the role Permissions tab. Admin only.</summary>
+    /// <summary>List permission categories for the role Permissions tab (category key + name). Admin only.</summary>
     [HttpGet("roles/permissions")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
     [ProducesResponseType(typeof(ListPermissionCatalogQueryResult), StatusCodes.Status200OK)]
@@ -174,11 +170,7 @@ public sealed class UsersController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Create a custom role with assigned users and module category permissions. Admin only.</summary>
-    /// <remarks>
-    /// <paramref name="request.Permissions"/> accepts module category names only, e.g. <c>["Dashboard","workflow","Folder"]</c>.
-    /// Permission keys like <c>dashboard.view</c> are not supported.
-    /// </remarks>
+    /// <summary>Create a custom role with assigned users and category-level permissions. Admin only.</summary>
     [HttpPost("roles")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
     [ProducesResponseType(typeof(CreateRoleResponse), StatusCodes.Status201Created)]
@@ -201,11 +193,7 @@ public sealed class UsersController : ControllerBase
             new CreateRoleResponse(result.RoleId!.Value, result.RoleName!, result.UserCount, result.PermissionCount));
     }
 
-    /// <summary>Get a custom role by ID with assigned users and permission categories. Admin only.</summary>
-    /// <remarks>
-    /// <c>permissionKeys</c> is the full category catalog with <c>key</c>, <c>name</c>, and <c>visible</c>
-    /// (true when granted to the role).
-    /// </remarks>
+    /// <summary>Get a custom role by ID with assigned users and permissionKeys (full catalog with visible flags). Admin only.</summary>
     [HttpGet("roles/{roleId:guid}")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
     [ProducesResponseType(typeof(GetRoleByIdQueryResult), StatusCodes.Status200OK)]
@@ -218,11 +206,7 @@ public sealed class UsersController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Update a custom role name, description, assigned users, and module category permissions. Admin only.</summary>
-    /// <remarks>
-    /// When <paramref name="request.Permissions"/> is provided, it replaces all permissions with category names only,
-    /// e.g. <c>["Dashboard","workflow","Folder"]</c>. Permission keys like <c>dashboard.view</c> are not supported.
-    /// </remarks>
+    /// <summary>Update a custom role name, description, assigned users, and category-level permissions. Admin only.</summary>
     [HttpPut("roles/{roleId:guid}")]
     [Authorize(Policy = AuthorizationPolicies.Admin)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -511,11 +495,7 @@ public sealed class UsersController : ControllerBase
         }
     }
 
-    /// <summary>Get a user by ID in the current tenant.</summary>
-    /// <remarks>
-    /// <c>permissionKeys</c> is the full category catalog with <c>key</c>, <c>name</c>, and <c>visible</c>
-    /// (true when granted to the user).
-    /// </remarks>
+    /// <summary>Get a user by ID in the current tenant. Includes permissionCount and permissionKeys as full catalog items with visible flags.</summary>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(UserExtendedResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -752,12 +732,16 @@ public sealed class UpdateUserRequest
     public string? SignaturePath { get; set; }
 }
 
-/// <summary>Request to create a custom role with assigned users and module category permissions.</summary>
-/// <param name="Permissions">Module category names, e.g. Dashboard, workflow, Folder.</param>
+/// <summary>
+/// Request to create a custom role with assigned users and category-level permissions.
+/// <paramref name="Permissions"/> accepts module category names or keys (e.g. ["Dashboard","workflow","Folder"]), not dotted keys like dashboard.view.
+/// </summary>
 public record CreateRoleRequest(string RoleName, IReadOnlyList<Guid> Users, IReadOnlyList<string> Permissions, string? Description = null);
 
-/// <summary>Request to update a custom role and replace its users and module category permissions.</summary>
-/// <param name="Permissions">Module category names, e.g. Dashboard, workflow, Folder.</param>
+/// <summary>
+/// Request to update a custom role and replace its users and category-level permissions.
+/// When provided, <paramref name="Permissions"/> is category names/keys only (e.g. ["Dashboard","workflow"]).
+/// </summary>
 public record UpdateRoleRequest(
     string? RoleName = null,
     string? Description = null,

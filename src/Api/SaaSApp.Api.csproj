@@ -54,14 +54,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="appsettings.ActivityLog.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-    <None Update="appsettings.EventLog.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
     <None Update="..\..\scripts\CreateWorkflowSchemaComplete.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>scripts\CreateWorkflowSchemaComplete.sql</Link>
@@ -69,6 +61,14 @@
     <None Update="..\..\scripts\CreateDmsSchema.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>scripts\CreateDmsSchema.sql</Link>
+    </None>
+    <None Update="appsettings.ActivityLog.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Update="appsettings.EventLog.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
     <EmbeddedResource Include="..\..\scripts\CreateWorkflowSchemaComplete.sql" Link="CreateWorkflowSchemaComplete.sql" />
     <EmbeddedResource Include="..\..\scripts\CreateDmsSchema.sql" Link="CreateDmsSchema.sql" />

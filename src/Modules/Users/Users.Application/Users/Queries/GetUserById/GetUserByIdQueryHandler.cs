@@ -33,7 +33,7 @@ public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, 
             request.UserId,
             user.Role,
             cancellationToken);
-        var (permissionCount, groupedPermissions) = await PermissionVisibilityMapper.MapAsync(
+        var (permissionCount, permissionItems) = await PermissionVisibilityMapper.MapAsync(
             permissionKeys,
             _categoryRepository,
             cancellationToken);
@@ -42,7 +42,7 @@ public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, 
             user,
             managerEmail,
             permissionCount,
-            groupedPermissions);
+            permissionItems);
     }
 
     private async Task<string?> ResolveManagerEmailAsync(Guid? managerId, CancellationToken cancellationToken)

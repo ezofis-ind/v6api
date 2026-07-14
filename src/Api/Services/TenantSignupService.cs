@@ -51,6 +51,7 @@ public sealed class TenantSignupService : ITenantSignupService
     private readonly IRepositoryStorageSeedService _repositoryStorageSeed;
     private readonly IActivityLogSchemaService _activityLogSchema;
     private readonly ActivityLogOptions _activityLogOptions;
+    private readonly EventLogOptions _eventLogOptions;
     private readonly TenantPilotUserOptions _pilotUserOptions;
     private readonly TenantDefaultCreditOptions _defaultCreditOptions;
 
@@ -63,6 +64,7 @@ public sealed class TenantSignupService : ITenantSignupService
         IRepositoryStorageSeedService repositoryStorageSeed,
         IActivityLogSchemaService activityLogSchema,
         IOptions<ActivityLogOptions> activityLogOptions,
+        IOptions<EventLogOptions> eventLogOptions,
         IOptions<TenantPilotUserOptions> pilotUserOptions,
         IOptions<TenantDefaultCreditOptions> defaultCreditOptions)
     {
@@ -74,6 +76,7 @@ public sealed class TenantSignupService : ITenantSignupService
         _repositoryStorageSeed = repositoryStorageSeed;
         _activityLogSchema = activityLogSchema;
         _activityLogOptions = activityLogOptions.Value;
+        _eventLogOptions = eventLogOptions.Value;
         _pilotUserOptions = pilotUserOptions.Value;
         _defaultCreditOptions = defaultCreditOptions.Value;
     }
@@ -126,7 +129,7 @@ public sealed class TenantSignupService : ITenantSignupService
             await ApplyUsersMigrationsAsync(tenantConnectionString, tenantId, cancellationToken);
         await ApplyWorkflowSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositorySchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
-        if (_activityLogOptions.Enabled)
+        if (_activityLogOptions.Enabled || _eventLogOptions.Enabled)
             await _activityLogSchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositoryStorageSeed.EnsureDefaultProvidersAsync(tenantConnectionString, tenantId, null, cancellationToken);
 

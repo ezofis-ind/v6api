@@ -1,6 +1,5 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
-using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 
 namespace SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
 
@@ -35,6 +34,7 @@ public sealed class ListPermissionCatalogQueryHandler : IRequestHandler<ListPerm
                 Array.Empty<PermissionMatrixItem>()))
             .ToList();
 
+        // Actions / matrix cells are unused for category-only role permissions; kept empty for API shape stability.
         return new ListPermissionCatalogQueryResult(Array.Empty<PermissionActionItem>(), rows);
     }
 }

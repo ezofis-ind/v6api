@@ -4,9 +4,9 @@ public sealed class EventLogOptions
 {
     public const string SectionName = "EventLog";
 
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; } = false;
 
-    /// <summary>Also log Auth login routes when unauthenticated (tenant header available).</summary>
+    /// <summary>Log Auth login routes even when the request is unauthenticated (JWT not yet present).</summary>
     public bool LogAuthLoginUnauthenticated { get; set; } = true;
 
     public string[] ExcludedPathPrefixes { get; set; } =

@@ -2,137 +2,173 @@ using System.Text.Json;
 
 namespace SaaSApp.ActivityLog.Application;
 
-/// <summary>Allowlisted subject fields from a request body for Event Log titles.</summary>
-public sealed record EventLogSubject(
-    string? Email = null,
-    string? DisplayName = null,
-    string? RoleName = null,
-    string? GroupName = null,
-    string? Name = null,
-    string? FileName = null)
+/// <summary>Optional request-subject fields used to enrich EventTitle (never passwords).</summary>
+public sealed class EventLogSubject
 {
-    public bool HasAny =>
-        !string.IsNullOrWhiteSpace(Email)
-        || !string.IsNullOrWhiteSpace(DisplayName)
-        || !string.IsNullOrWhiteSpace(RoleName)
-        || !string.IsNullOrWhiteSpace(GroupName)
-        || !string.IsNullOrWhiteSpace(Name)
-        || !string.IsNullOrWhiteSpace(FileName);
-}
+    public string? Email { get; init; }
+    public string? Name { get; init; }
+    public string? FileName { get; init; }
+    public string? RoleName { get; init; }
+    /// <summary>Assigned user role from update payloads (e.g. Admin).</summary>
+    public string? Role { get; init; }
+    public string? GroupName { get; init; }
 
-/// <summary>Parses allowlisted JSON properties only (never passwords or other secrets).</summary>
-public static class EventLogSubjectParser
-{
-    public static EventLogSubject Parse(ReadOnlySpan<byte> utf8Json)
+    public static EventLogSubject Empty { get; } = new();
+
+    public EventLogSubject With(
+        string? email = null,
+        string? name = null,
+        string? fileName = null,
+        string? roleName = null,
+        string? role = null,
+        string? groupName = null) =>
+        new()
+        {
+            Email = First(email, Email),
+            Name = First(name, Name),
+            FileName = First(fileName, FileName),
+            RoleName = First(roleName, RoleName),
+            Role = First(role, Role),
+            GroupName = First(groupName, GroupName)
+        };
+
+    public static EventLogSubject ParseAllowlistedJson(ReadOnlySpan<byte> utf8Json)
     {
         if (utf8Json.IsEmpty)
-            return new EventLogSubject();
+            return Empty;
 
         try
         {
             using var doc = JsonDocument.Parse(utf8Json.ToArray());
-            return FromRoot(doc.RootElement);
+            return FromElement(doc.RootElement);
         }
         catch
         {
-            return new EventLogSubject();
+            return Empty;
         }
     }
 
-    public static EventLogSubject Parse(ReadOnlySpan<char> json)
+    public static EventLogSubject ParseAllowlistedJson(string? json)
     {
-        if (json.IsEmpty || json.IsWhiteSpace())
-            return new EventLogSubject();
+        if (string.IsNullOrWhiteSpace(json))
+            return Empty;
 
         try
         {
-            using var doc = JsonDocument.Parse(json.ToString());
-            return FromRoot(doc.RootElement);
+            using var doc = JsonDocument.Parse(json);
+            return FromElement(doc.RootElement);
         }
         catch
         {
-            return new EventLogSubject();
+            return Empty;
         }
     }
 
-    private static EventLogSubject FromRoot(JsonElement root)
+    private static EventLogSubject FromElement(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object)
-            return new EventLogSubject();
+            return Empty;
 
-        var topName = GetStringIgnoreCase(root, "name");
-        var nestedName = GetNestedName(root);
-        var name = FirstNonEmpty(topName, nestedName);
+        string? email = null;
+        string? name = null;
+        string? fileName = null;
+        string? roleName = null;
+        string? role = null;
+        string? groupName = null;
+        string? firstName = null;
+        string? lastName = null;
 
-        return new EventLogSubject(
-            Email: GetStringIgnoreCase(root, "email"),
-            DisplayName: GetStringIgnoreCase(root, "displayName"),
-            RoleName: GetStringIgnoreCase(root, "roleName"),
-            GroupName: GetStringIgnoreCase(root, "groupName"),
-            Name: name,
-            FileName: GetStringIgnoreCase(root, "fileName"));
-    }
-
-    /// <summary>Prefer settings.general.name for workflow/form designer JSON.</summary>
-    private static string? GetNestedName(JsonElement root)
-    {
-        if (TryGetObjectIgnoreCase(root, "settings", out var settings)
-            && TryGetObjectIgnoreCase(settings, "general", out var general))
-        {
-            return GetStringIgnoreCase(general, "name");
-        }
-
-        if (TryGetObjectIgnoreCase(root, "workflowJson", out var workflowJson)
-            && TryGetObjectIgnoreCase(workflowJson, "settings", out var wjSettings)
-            && TryGetObjectIgnoreCase(wjSettings, "general", out var wjGeneral))
-        {
-            return GetStringIgnoreCase(wjGeneral, "name");
-        }
-
-        return null;
-    }
-
-    private static bool TryGetObjectIgnoreCase(JsonElement root, string propertyName, out JsonElement obj)
-    {
         foreach (var prop in root.EnumerateObject())
         {
-            if (!prop.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (prop.Value.ValueKind == JsonValueKind.Object)
+            if (prop.Value.ValueKind != JsonValueKind.String)
             {
-                obj = prop.Value;
+                if (string.Equals(prop.Name, "settings", StringComparison.OrdinalIgnoreCase)
+                    && prop.Value.ValueKind == JsonValueKind.Object
+                    && TryGetNestedName(prop.Value, out var nestedName))
+                {
+                    name ??= nestedName;
+                }
+
+                continue;
+            }
+
+            var value = prop.Value.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+
+            var trimmed = value.Trim();
+
+            if (prop.Name.Equals("email", StringComparison.OrdinalIgnoreCase))
+                email ??= trimmed;
+            else if (prop.Name.Equals("displayName", StringComparison.OrdinalIgnoreCase))
+                name ??= trimmed;
+            else if (prop.Name.Equals("name", StringComparison.OrdinalIgnoreCase))
+                name ??= trimmed;
+            else if (prop.Name.Equals("firstName", StringComparison.OrdinalIgnoreCase))
+                firstName ??= trimmed;
+            else if (prop.Name.Equals("lastName", StringComparison.OrdinalIgnoreCase))
+                lastName ??= trimmed;
+            else if (prop.Name.Equals("fileName", StringComparison.OrdinalIgnoreCase))
+                fileName ??= trimmed;
+            else if (prop.Name.Equals("roleName", StringComparison.OrdinalIgnoreCase))
+                roleName ??= trimmed;
+            else if (prop.Name.Equals("role", StringComparison.OrdinalIgnoreCase))
+                role ??= trimmed;
+            else if (prop.Name.Equals("groupName", StringComparison.OrdinalIgnoreCase))
+                groupName ??= trimmed;
+        }
+
+        if (name == null && (!string.IsNullOrWhiteSpace(firstName) || !string.IsNullOrWhiteSpace(lastName)))
+            name = string.Join(' ', new[] { firstName, lastName }.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+        if (name == null && TryGetNestedName(root, out var settingsName))
+            name = settingsName;
+
+        return new EventLogSubject
+        {
+            Email = email,
+            Name = name,
+            FileName = fileName,
+            RoleName = roleName,
+            Role = role,
+            GroupName = groupName
+        };
+    }
+
+    private static string? First(string? preferred, string? fallback) =>
+        !string.IsNullOrWhiteSpace(preferred) ? preferred.Trim() : fallback;
+
+    private static bool TryGetNestedName(JsonElement root, out string? name)
+    {
+        name = null;
+        if (!TryGetPropertyIgnoreCase(root, "settings", out var settings)
+            || settings.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!TryGetPropertyIgnoreCase(settings, "general", out var general)
+            || general.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!TryGetPropertyIgnoreCase(general, "name", out var nameEl)
+            || nameEl.ValueKind != JsonValueKind.String)
+            return false;
+
+        name = nameEl.GetString()?.Trim();
+        return !string.IsNullOrWhiteSpace(name);
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (prop.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = prop.Value;
                 return true;
             }
         }
 
-        obj = default;
+        value = default;
         return false;
-    }
-
-    private static string? GetStringIgnoreCase(JsonElement root, string propertyName)
-    {
-        foreach (var prop in root.EnumerateObject())
-        {
-            if (!prop.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (prop.Value.ValueKind != JsonValueKind.String)
-                return null;
-
-            var value = prop.Value.GetString();
-            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-        }
-
-        return null;
-    }
-
-    private static string? FirstNonEmpty(params string?[] values)
-    {
-        foreach (var value in values)
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-                return value.Trim();
-        }
-
-        return null;
     }
 }
