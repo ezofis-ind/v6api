@@ -139,6 +139,27 @@ internal static class TenantSchemaEnsureHelper
             applySchema,
             cancellationToken);
 
+    /// <summary>
+    /// Seeds Admin/TenantUser roles once per tenant when the Admin role row is missing.
+    /// Marker does not skip when Roles table exists but builtins were never seeded.
+    /// </summary>
+    public static Task EnsureBuiltinRolesAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "users-builtin-roles",
+            connectionString,
+            """
+            SELECT 1
+            FROM [users].[Roles]
+            WHERE [Name] = N'Admin' AND [IsDeleted] = 0
+            """,
+            applySchema,
+            cancellationToken);
+
     private static async Task EnsureOnceAsync(
         Guid tenantId,
         string schemaKey,

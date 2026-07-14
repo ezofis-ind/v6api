@@ -51,6 +51,7 @@ public static class UsersInfrastructureServiceCollectionExtensions
         services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IGroupRepository, GroupRepository>();
         services.AddScoped<IUsersSchemaEnsurer, UsersSchemaEnsurerService>();
+        services.AddScoped<IBuiltinRoleProvisioning, BuiltinRoleProvisioning>();
         services.AddScoped<IMenuRepository, MenuRepository>();
         services.AddScoped<IPermissionCategoryRepository, PermissionCategoryRepository>();
         services.AddScoped<IUnitOfWork, UsersUnitOfWork>();

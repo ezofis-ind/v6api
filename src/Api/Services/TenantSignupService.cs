@@ -200,6 +200,8 @@ public sealed class TenantSignupService : ITenantSignupService
                 tenantId,
                 adminEmail,
                 cancellationToken);
+
+            await EnsureBuiltinRolesAsync(tenantConnectionString, tenantId, cancellationToken);
         }
 
         return new TenantSignupResult(tenantId, displayName, dbName, tenantConnectionString);
@@ -305,6 +307,24 @@ public sealed class TenantSignupService : ITenantSignupService
         await UsersSchemaEnsurer.EnsureGroupsTablesAsync(context, cancellationToken);
         await UsersSchemaEnsurer.EnsurePermissionCategoriesAsync(context, cancellationToken);
         await UsersSchemaEnsurer.EnsureRoleMenusTablesAsync(context, cancellationToken);
+    }
+
+    private static async Task EnsureBuiltinRolesAsync(
+        string tenantConnectionString,
+        Guid tenantId,
+        CancellationToken cancellationToken)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<UsersDbContext>();
+        optionsBuilder.UseSqlServer(tenantConnectionString, sql =>
+        {
+            sql.MigrationsHistoryTable("__EFMigrationsHistory", UsersDbContext.SchemaName);
+            sql.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorNumbersToAdd: null);
+        });
+        await using var context = new UsersDbContext(optionsBuilder.Options, new StaticTenantProvider(tenantId));
+        await BuiltinRoleProvisioning.EnsureAsync(context, tenantId, cancellationToken);
     }
 
     private async Task CreatePilotUserIfConfiguredAsync(

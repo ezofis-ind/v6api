@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using SaaSApp.MultiTenancy;
 using SaaSApp.Users.Infrastructure.Persistence;
 
@@ -21,11 +22,12 @@ public sealed class UsersPermissionSchemaEnsuringMiddleware
         var path = context.Request.Path.Value;
         var method = context.Request.Method;
         var needsPermissionCategories = RequiresPermissionCategories(method, path);
+        var needsBuiltinRoles = RequiresBuiltinRoles(method, path);
         var needsMenus = RequiresMenus(method, path);
         var needsRoleMenus = RequiresRoleMenus(method, path);
         var needsExtendedUserColumns = RequiresExtendedUserColumns(path);
 
-        if (!needsPermissionCategories && !needsMenus && !needsRoleMenus && !needsExtendedUserColumns)
+        if (!needsPermissionCategories && !needsBuiltinRoles && !needsMenus && !needsRoleMenus && !needsExtendedUserColumns)
         {
             await _next(context);
             return;
@@ -48,12 +50,21 @@ public sealed class UsersPermissionSchemaEnsuringMiddleware
                 context.RequestAborted);
         }
 
-        if (needsPermissionCategories)
+        if (needsPermissionCategories || needsBuiltinRoles)
         {
             await TenantSchemaEnsureHelper.EnsurePermissionCategoriesAsync(
                 tenantId.Value,
                 conn,
                 () => UsersSchemaEnsurer.EnsurePermissionCategoriesAsync(conn, context.RequestAborted),
+                context.RequestAborted);
+        }
+
+        if (needsBuiltinRoles)
+        {
+            await TenantSchemaEnsureHelper.EnsureBuiltinRolesAsync(
+                tenantId.Value,
+                conn,
+                () => EnsureBuiltinRolesForTenantAsync(tenantId.Value, conn, context.RequestAborted),
                 context.RequestAborted);
         }
 
@@ -76,6 +87,24 @@ public sealed class UsersPermissionSchemaEnsuringMiddleware
         }
 
         await _next(context);
+    }
+
+    private static async Task EnsureBuiltinRolesForTenantAsync(
+        Guid tenantId,
+        string connectionString,
+        CancellationToken cancellationToken)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<UsersDbContext>();
+        optionsBuilder.UseSqlServer(connectionString, sql =>
+        {
+            sql.MigrationsHistoryTable("__EFMigrationsHistory", UsersDbContext.SchemaName);
+            sql.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorNumbersToAdd: null);
+        });
+        await using var usersContext = new UsersDbContext(optionsBuilder.Options, new StaticTenantProvider(tenantId));
+        await BuiltinRoleProvisioning.EnsureAsync(usersContext, tenantId, cancellationToken);
     }
 
     private static bool RequiresExtendedUserColumns(string? path)
@@ -104,6 +133,17 @@ public sealed class UsersPermissionSchemaEnsuringMiddleware
             return true;
 
         return IsGetUserByIdPath(path);
+    }
+
+    private static bool RequiresBuiltinRoles(string method, string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+
+        if (RequiresPermissionCategories(method, path))
+            return true;
+
+        return path.StartsWith("/api/users/roles", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool RequiresMenus(string method, string? path)
