@@ -82,7 +82,7 @@ public sealed class RoleRepository : IRoleRepository
 
         IQueryable<string> query = keysFromAssignments;
 
-        if (!string.IsNullOrWhiteSpace(userRoleName) && !Role.IsReservedName(userRoleName))
+        if (!string.IsNullOrWhiteSpace(userRoleName))
         {
             var roleName = userRoleName.Trim();
             var keysFromRoleName = _context.Roles

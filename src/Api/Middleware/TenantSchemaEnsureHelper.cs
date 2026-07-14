@@ -64,6 +64,19 @@ internal static class TenantSchemaEnsureHelper
             applySchema,
             cancellationToken);
 
+    public static Task EnsureEventLogSchemaAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "activitylog-eventlogs",
+            connectionString,
+            "SELECT 1 FROM sys.tables WHERE name = N'EventLogs' AND schema_id = SCHEMA_ID(N'activitylog')",
+            applySchema,
+            cancellationToken);
+
     public static Task EnsurePermissionCategoriesAsync(
         Guid tenantId,
         string connectionString,
@@ -122,6 +135,27 @@ internal static class TenantSchemaEnsureHelper
               AND COL_LENGTH('users.Users', 'Location') IS NOT NULL
               AND COL_LENGTH('users.Users', 'GroupName') IS NOT NULL
               AND COL_LENGTH('users.Users', 'MfaMethods') IS NOT NULL
+            """,
+            applySchema,
+            cancellationToken);
+
+    /// <summary>
+    /// Seeds Admin/TenantUser roles once per tenant when the Admin role row is missing.
+    /// Marker does not skip when Roles table exists but builtins were never seeded.
+    /// </summary>
+    public static Task EnsureBuiltinRolesAsync(
+        Guid tenantId,
+        string connectionString,
+        Func<Task> applySchema,
+        CancellationToken cancellationToken) =>
+        EnsureOnceAsync(
+            tenantId,
+            "users-builtin-roles",
+            connectionString,
+            """
+            SELECT 1
+            FROM [users].[Roles]
+            WHERE [Name] = N'Admin' AND [IsDeleted] = 0
             """,
             applySchema,
             cancellationToken);

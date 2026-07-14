@@ -1,5 +1,6 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
+using SaaSApp.Users.Application.Roles;
 using SaaSApp.Users.Application.Users;
 
 namespace SaaSApp.Users.Application.Users.Queries.GetUserById;
@@ -32,7 +33,7 @@ public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, 
             request.UserId,
             user.Role,
             cancellationToken);
-        var (permissionCount, groupedPermissions) = await UserPermissionMapper.MapGroupedAsync(
+        var (permissionCount, permissionItems) = await PermissionVisibilityMapper.MapAsync(
             permissionKeys,
             _categoryRepository,
             cancellationToken);
@@ -41,7 +42,7 @@ public sealed class GetUserByIdQueryHandler : IRequestHandler<GetUserByIdQuery, 
             user,
             managerEmail,
             permissionCount,
-            groupedPermissions);
+            permissionItems);
     }
 
     private async Task<string?> ResolveManagerEmailAsync(Guid? managerId, CancellationToken cancellationToken)

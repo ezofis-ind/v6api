@@ -1,5 +1,5 @@
 using System.Text.Json.Serialization;
-using SaaSApp.Users.Application.Roles.Queries.ListPermissionCatalog;
+using SaaSApp.Users.Application.Roles;
 
 namespace SaaSApp.Users.Application.Users;
 
@@ -67,5 +67,5 @@ public sealed class UserExtendedResponse
     public int? PermissionCount { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<PermissionCategoryRow>? PermissionKeys { get; set; }
+    public IReadOnlyList<PermissionKeyItem>? PermissionKeys { get; set; }
 }

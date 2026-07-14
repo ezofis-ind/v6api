@@ -1,5 +1,4 @@
 using SaaSApp.Users.Application.Contracts;
-using SaaSApp.Users.Domain;
 
 namespace SaaSApp.Users.Application.Roles;
 
@@ -18,13 +17,20 @@ public sealed class PermissionValidator : IPermissionValidator
         var activeCategoryKeys = new HashSet<string>(
             activeCategories.Select(c => c.Key),
             StringComparer.OrdinalIgnoreCase);
+        var activeCategoryNames = new HashSet<string>(
+            activeCategories.Select(c => c.Name),
+            StringComparer.OrdinalIgnoreCase);
 
         foreach (var key in permissionKeys)
         {
-            if (!PermissionKeyHelper.TryParse(key, out var categoryKey, out _))
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            var trimmed = key.Trim();
+            if (trimmed.Contains('.'))
                 return key;
 
-            if (!activeCategoryKeys.Contains(categoryKey))
+            if (!activeCategoryKeys.Contains(trimmed) && !activeCategoryNames.Contains(trimmed))
                 return key;
         }
 

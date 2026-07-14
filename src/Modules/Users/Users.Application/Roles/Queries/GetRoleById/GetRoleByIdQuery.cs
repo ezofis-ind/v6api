@@ -1,5 +1,6 @@
 using MediatR;
 using SaaSApp.Users.Application.Contracts;
+using SaaSApp.Users.Application.Roles;
 
 namespace SaaSApp.Users.Application.Roles.Queries.GetRoleById;
 
@@ -11,15 +12,19 @@ public record GetRoleByIdQueryResult(
     string? Description,
     DateTime CreatedAtUtc,
     IReadOnlyList<Guid> Users,
-    IReadOnlyList<string> Permissions);
+    IReadOnlyList<PermissionKeyItem> PermissionKeys);
 
 public sealed class GetRoleByIdQueryHandler : IRequestHandler<GetRoleByIdQuery, GetRoleByIdQueryResult?>
 {
     private readonly IRoleRepository _roleRepository;
+    private readonly IPermissionCategoryRepository _categoryRepository;
 
-    public GetRoleByIdQueryHandler(IRoleRepository roleRepository)
+    public GetRoleByIdQueryHandler(
+        IRoleRepository roleRepository,
+        IPermissionCategoryRepository categoryRepository)
     {
         _roleRepository = roleRepository;
+        _categoryRepository = categoryRepository;
     }
 
     public async Task<GetRoleByIdQueryResult?> Handle(GetRoleByIdQuery request, CancellationToken cancellationToken)
@@ -28,12 +33,17 @@ public sealed class GetRoleByIdQueryHandler : IRequestHandler<GetRoleByIdQuery, 
         if (role == null)
             return null;
 
+        var (_, permissionKeys) = await PermissionVisibilityMapper.MapAsync(
+            role.PermissionKeys,
+            _categoryRepository,
+            cancellationToken);
+
         return new GetRoleByIdQueryResult(
             role.Id,
             role.Name,
             role.Description,
             role.CreatedAtUtc,
             role.UserIds,
-            role.PermissionKeys);
+            permissionKeys);
     }
 }

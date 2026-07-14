@@ -9,17 +9,20 @@ public sealed class CreateUserCommandHandler : IRequestHandler<CreateUserCommand
     private readonly IUserRepository _userRepository;
     private readonly IGroupRepository _groupRepository;
     private readonly IUsersSchemaEnsurer _usersSchemaEnsurer;
+    private readonly IBuiltinRoleProvisioning _builtinRoleProvisioning;
     private readonly ITenantContext _tenantContext;
 
     public CreateUserCommandHandler(
         IUserRepository userRepository,
         IGroupRepository groupRepository,
         IUsersSchemaEnsurer usersSchemaEnsurer,
+        IBuiltinRoleProvisioning builtinRoleProvisioning,
         ITenantContext tenantContext)
     {
         _userRepository = userRepository;
         _groupRepository = groupRepository;
         _usersSchemaEnsurer = usersSchemaEnsurer;
+        _builtinRoleProvisioning = builtinRoleProvisioning;
         _tenantContext = tenantContext;
     }
 
@@ -141,6 +144,8 @@ public sealed class CreateUserCommandHandler : IRequestHandler<CreateUserCommand
                 await _groupRepository.AddMemberAsync(group.Id, user.Id, cancellationToken);
             }
         }
+
+        await _builtinRoleProvisioning.SyncUserMembershipAsync(user.Id, resolvedRole, cancellationToken);
 
         return new CreateUserCommandResult(
             Success: true,

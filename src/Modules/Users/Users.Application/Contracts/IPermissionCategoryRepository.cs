@@ -8,5 +8,7 @@ public interface IPermissionCategoryRepository
     Task<IReadOnlyList<PermissionCategoryItem>> ListActiveAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Insert any category keys that do not already exist.</summary>
-    Task EnsureCategoriesExistAsync(IEnumerable<string> categoryKeys, CancellationToken cancellationToken = default);
+    Task EnsureCategoriesExistAsync(
+        IEnumerable<(string Key, string Name)> categories,
+        CancellationToken cancellationToken = default);
 }

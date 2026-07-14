@@ -51,6 +51,7 @@ public sealed class TenantSignupService : ITenantSignupService
     private readonly IRepositoryStorageSeedService _repositoryStorageSeed;
     private readonly IActivityLogSchemaService _activityLogSchema;
     private readonly ActivityLogOptions _activityLogOptions;
+    private readonly EventLogOptions _eventLogOptions;
     private readonly TenantPilotUserOptions _pilotUserOptions;
     private readonly TenantDefaultCreditOptions _defaultCreditOptions;
 
@@ -63,6 +64,7 @@ public sealed class TenantSignupService : ITenantSignupService
         IRepositoryStorageSeedService repositoryStorageSeed,
         IActivityLogSchemaService activityLogSchema,
         IOptions<ActivityLogOptions> activityLogOptions,
+        IOptions<EventLogOptions> eventLogOptions,
         IOptions<TenantPilotUserOptions> pilotUserOptions,
         IOptions<TenantDefaultCreditOptions> defaultCreditOptions)
     {
@@ -74,6 +76,7 @@ public sealed class TenantSignupService : ITenantSignupService
         _repositoryStorageSeed = repositoryStorageSeed;
         _activityLogSchema = activityLogSchema;
         _activityLogOptions = activityLogOptions.Value;
+        _eventLogOptions = eventLogOptions.Value;
         _pilotUserOptions = pilotUserOptions.Value;
         _defaultCreditOptions = defaultCreditOptions.Value;
     }
@@ -126,7 +129,7 @@ public sealed class TenantSignupService : ITenantSignupService
             await ApplyUsersMigrationsAsync(tenantConnectionString, tenantId, cancellationToken);
         await ApplyWorkflowSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositorySchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
-        if (_activityLogOptions.Enabled)
+        if (_activityLogOptions.Enabled || _eventLogOptions.Enabled)
             await _activityLogSchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
         await _repositoryStorageSeed.EnsureDefaultProvidersAsync(tenantConnectionString, tenantId, null, cancellationToken);
 
@@ -197,6 +200,8 @@ public sealed class TenantSignupService : ITenantSignupService
                 tenantId,
                 adminEmail,
                 cancellationToken);
+
+            await EnsureBuiltinRolesAsync(tenantConnectionString, tenantId, cancellationToken);
         }
 
         return new TenantSignupResult(tenantId, displayName, dbName, tenantConnectionString);
@@ -302,6 +307,24 @@ public sealed class TenantSignupService : ITenantSignupService
         await UsersSchemaEnsurer.EnsureGroupsTablesAsync(context, cancellationToken);
         await UsersSchemaEnsurer.EnsurePermissionCategoriesAsync(context, cancellationToken);
         await UsersSchemaEnsurer.EnsureRoleMenusTablesAsync(context, cancellationToken);
+    }
+
+    private static async Task EnsureBuiltinRolesAsync(
+        string tenantConnectionString,
+        Guid tenantId,
+        CancellationToken cancellationToken)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<UsersDbContext>();
+        optionsBuilder.UseSqlServer(tenantConnectionString, sql =>
+        {
+            sql.MigrationsHistoryTable("__EFMigrationsHistory", UsersDbContext.SchemaName);
+            sql.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorNumbersToAdd: null);
+        });
+        await using var context = new UsersDbContext(optionsBuilder.Options, new StaticTenantProvider(tenantId));
+        await BuiltinRoleProvisioning.EnsureAsync(context, tenantId, cancellationToken);
     }
 
     private async Task CreatePilotUserIfConfiguredAsync(

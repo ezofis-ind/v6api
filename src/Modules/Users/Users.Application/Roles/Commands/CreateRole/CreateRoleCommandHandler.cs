@@ -47,21 +47,21 @@ public sealed class CreateRoleCommandHandler : IRequestHandler<CreateRoleCommand
         if (request.PermissionKeys == null || request.PermissionKeys.Count == 0)
             return Fail("At least one permission is required.");
 
-        var (permissionKeys, invalidPermission) = await PermissionKeyProvisioning.PrepareAsync(
+        var (categoryKeys, permissionError) = await PermissionCategoryResolver.ResolveAsync(
             request.PermissionKeys,
             _categoryRepository,
             cancellationToken);
-        if (permissionKeys.Count == 0)
+        if (permissionError != null)
+            return Fail(permissionError);
+        if (categoryKeys.Count == 0)
             return Fail("At least one permission is required.");
-        if (invalidPermission != null)
-            return Fail($"Invalid permission key: '{invalidPermission}'.");
 
         if (await _roleRepository.ExistsByNameAsync(roleName, cancellationToken: cancellationToken))
             return Fail($"A role named '{roleName}' already exists.");
 
         var role = Role.Create(tenantId, roleName, request.Description);
         role.AssignUsers(userIds);
-        role.AssignPermissions(permissionKeys);
+        role.AssignPermissions(categoryKeys);
         await _roleRepository.AddAsync(role, cancellationToken);
 
         return new CreateRoleCommandResult(
@@ -69,7 +69,7 @@ public sealed class CreateRoleCommandHandler : IRequestHandler<CreateRoleCommand
             RoleId: role.Id,
             RoleName: role.Name,
             UserCount: userIds.Count,
-            PermissionCount: permissionKeys.Count,
+            PermissionCount: categoryKeys.Count,
             StatusCode: 201);
     }
 

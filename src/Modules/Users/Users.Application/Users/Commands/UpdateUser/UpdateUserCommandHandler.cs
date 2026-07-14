@@ -10,17 +10,20 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
     private readonly IUserRepository _userRepository;
     private readonly IGroupRepository _groupRepository;
     private readonly IUsersSchemaEnsurer _usersSchemaEnsurer;
+    private readonly IBuiltinRoleProvisioning _builtinRoleProvisioning;
     private readonly ITenantContext _tenantContext;
 
     public UpdateUserCommandHandler(
         IUserRepository userRepository,
         IGroupRepository groupRepository,
         IUsersSchemaEnsurer usersSchemaEnsurer,
+        IBuiltinRoleProvisioning builtinRoleProvisioning,
         ITenantContext tenantContext)
     {
         _userRepository = userRepository;
         _groupRepository = groupRepository;
         _usersSchemaEnsurer = usersSchemaEnsurer;
+        _builtinRoleProvisioning = builtinRoleProvisioning;
         _tenantContext = tenantContext;
     }
 
@@ -191,6 +194,9 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
         }
 
         _userRepository.Update(user);
+
+        if (roleChanged)
+            await _builtinRoleProvisioning.SyncUserMembershipAsync(user.Id, user.Role, cancellationToken);
 
         string? registryEmail = null;
         string? registryRole = null;

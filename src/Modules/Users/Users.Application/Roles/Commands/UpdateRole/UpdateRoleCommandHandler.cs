@@ -41,26 +41,36 @@ public sealed class UpdateRoleCommandHandler : IRequestHandler<UpdateRoleCommand
         if (role == null)
             return Fail("Role not found.", 404);
 
+        var isBuiltin = Role.IsReservedName(role.Name);
+
         if (hasName)
         {
             var roleName = request.Name!.Trim();
-            if (Role.IsReservedName(roleName))
-                return Fail($"Role name '{roleName}' is reserved.");
-
-            if (await _roleRepository.ExistsByNameAsync(roleName, request.RoleId, cancellationToken))
-                return Fail($"A role named '{roleName}' already exists.");
-
-            var oldName = role.Name;
-            if (!string.Equals(oldName, roleName, StringComparison.OrdinalIgnoreCase))
+            if (isBuiltin)
             {
-                role.UpdateName(roleName);
+                if (!string.Equals(role.Name, roleName, StringComparison.OrdinalIgnoreCase))
+                    return Fail("Built-in role names cannot be renamed.");
+            }
+            else
+            {
+                if (Role.IsReservedName(roleName))
+                    return Fail($"Role name '{roleName}' is reserved.");
 
-                var tenantId = _tenantContext.TenantId
-                    ?? throw new InvalidOperationException("TenantId is required to rename a role.");
+                if (await _roleRepository.ExistsByNameAsync(roleName, request.RoleId, cancellationToken))
+                    return Fail($"A role named '{roleName}' already exists.");
 
-                var affectedEmails = await _userRepository.RenameRoleForUsersAsync(oldName, roleName, cancellationToken);
-                foreach (var email in affectedEmails)
-                    await _userTenantRoleSync.SyncRoleForUserAsync(email, tenantId, roleName, cancellationToken);
+                var oldName = role.Name;
+                if (!string.Equals(oldName, roleName, StringComparison.OrdinalIgnoreCase))
+                {
+                    role.UpdateName(roleName);
+
+                    var tenantId = _tenantContext.TenantId
+                        ?? throw new InvalidOperationException("TenantId is required to rename a role.");
+
+                    var affectedEmails = await _userRepository.RenameRoleForUsersAsync(oldName, roleName, cancellationToken);
+                    foreach (var email in affectedEmails)
+                        await _userTenantRoleSync.SyncRoleForUserAsync(email, tenantId, roleName, cancellationToken);
+                }
             }
         }
 
@@ -85,16 +95,16 @@ public sealed class UpdateRoleCommandHandler : IRequestHandler<UpdateRoleCommand
             if (request.PermissionKeys!.Count == 0)
                 return Fail("At least one permission is required.");
 
-            var (permissionKeys, invalidPermission) = await PermissionKeyProvisioning.PrepareAsync(
+            var (categoryKeys, permissionError) = await PermissionCategoryResolver.ResolveAsync(
                 request.PermissionKeys,
                 _categoryRepository,
                 cancellationToken);
-            if (permissionKeys.Count == 0)
+            if (permissionError != null)
+                return Fail(permissionError);
+            if (categoryKeys.Count == 0)
                 return Fail("At least one permission is required.");
-            if (invalidPermission != null)
-                return Fail($"Invalid permission key: '{invalidPermission}'.");
 
-            role.ReplacePermissions(permissionKeys);
+            role.ReplacePermissions(categoryKeys);
         }
 
         return new UpdateRoleCommandResult(Success: true, StatusCode: 204);

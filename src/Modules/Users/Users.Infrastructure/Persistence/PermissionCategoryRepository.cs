@@ -24,12 +24,17 @@ public sealed class PermissionCategoryRepository : IPermissionCategoryRepository
             .ToListAsync(cancellationToken);
     }
 
-    public async Task EnsureCategoriesExistAsync(IEnumerable<string> categoryKeys, CancellationToken cancellationToken = default)
+    public async Task EnsureCategoriesExistAsync(
+        IEnumerable<(string Key, string Name)> categories,
+        CancellationToken cancellationToken = default)
     {
-        var normalized = categoryKeys
-            .Select(k => k.Trim().ToLowerInvariant())
-            .Where(k => !string.IsNullOrWhiteSpace(k))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var normalized = categories
+            .Select(c => (
+                Key: c.Key.Trim().ToLowerInvariant(),
+                Name: string.IsNullOrWhiteSpace(c.Name) ? FormatCategoryName(c.Key) : c.Name.Trim()))
+            .Where(c => !string.IsNullOrWhiteSpace(c.Key))
+            .GroupBy(c => c.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
             .ToList();
 
         if (normalized.Count == 0)
@@ -41,17 +46,17 @@ public sealed class PermissionCategoryRepository : IPermissionCategoryRepository
             .ToListAsync(cancellationToken);
 
         var existingSet = new HashSet<string>(existingKeys, StringComparer.OrdinalIgnoreCase);
-        var missing = normalized.Where(k => !existingSet.Contains(k)).ToList();
+        var missing = normalized.Where(c => !existingSet.Contains(c.Key)).ToList();
         if (missing.Count == 0)
             return;
 
         var maxSortOrder = await _context.PermissionCategories
             .MaxAsync(c => (int?)c.SortOrder, cancellationToken) ?? 0;
 
-        foreach (var key in missing)
+        foreach (var (key, name) in missing)
         {
             maxSortOrder++;
-            var category = PermissionCategory.Create(key, FormatCategoryName(key), maxSortOrder);
+            var category = PermissionCategory.Create(key, name, maxSortOrder);
             await _context.PermissionCategories.AddAsync(category, cancellationToken);
         }
     }
