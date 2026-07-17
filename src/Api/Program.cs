@@ -6,6 +6,7 @@ using Microsoft.Identity.Web;
 using SaaSApp.Api.Middleware;
 using SaaSApp.Api.Options;
 using SaaSApp.Api.Services;
+using SaaSApp.Api.Services.Jira;
 using SaaSApp.Api.Swagger;
 using SaaSApp.Billing.Application;
 using SaaSApp.Billing.Infrastructure;
@@ -54,6 +55,10 @@ builder.Services.Configure<TenantPilotUserOptions>(
     builder.Configuration.GetSection(TenantPilotUserOptions.SectionName));
 builder.Services.Configure<TenantDefaultCreditOptions>(
     builder.Configuration.GetSection(TenantDefaultCreditOptions.SectionName));
+builder.Services.Configure<JiraOptions>(
+    builder.Configuration.GetSection(JiraOptions.SectionName));
+builder.Services.AddHttpClient<JiraIssueClient>();
+builder.Services.AddScoped<SupportTicketStore>();
 builder.Services.AddScoped<IWorkflowSchemaService, WorkflowSchemaService>();
 builder.Services.AddScoped<IDmsSchemaService, DmsSchemaService>();
 builder.Services.AddHttpClient(nameof(LegacyWorkflowTransactionService));
