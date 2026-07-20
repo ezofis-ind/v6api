@@ -59,6 +59,7 @@ builder.Services.Configure<JiraOptions>(
     builder.Configuration.GetSection(JiraOptions.SectionName));
 builder.Services.AddHttpClient<JiraIssueClient>();
 builder.Services.AddScoped<SupportTicketStore>();
+builder.Services.AddScoped<SupportTicketEmailService>();
 builder.Services.AddScoped<IWorkflowSchemaService, WorkflowSchemaService>();
 builder.Services.AddScoped<IDmsSchemaService, DmsSchemaService>();
 builder.Services.AddHttpClient(nameof(LegacyWorkflowTransactionService));

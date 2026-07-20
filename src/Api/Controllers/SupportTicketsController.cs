@@ -19,17 +19,20 @@ public sealed class SupportTicketsController : ControllerBase
     private readonly ITenantProvider _tenantProvider;
     private readonly JiraIssueClient _jiraClient;
     private readonly SupportTicketStore _store;
+    private readonly SupportTicketEmailService _emailService;
     private readonly JiraOptions _jiraOptions;
 
     public SupportTicketsController(
         ITenantProvider tenantProvider,
         JiraIssueClient jiraClient,
         SupportTicketStore store,
+        SupportTicketEmailService emailService,
         IOptions<JiraOptions> jiraOptions)
     {
         _tenantProvider = tenantProvider;
         _jiraClient = jiraClient;
         _store = store;
+        _emailService = emailService;
         _jiraOptions = jiraOptions.Value;
     }
 
@@ -76,6 +79,8 @@ public sealed class SupportTicketsController : ControllerBase
             };
         }
 
+        var createdAtUtc = DateTime.UtcNow;
+
         await _store.InsertAsync(
             new SupportTicketInsertRequest
             {
@@ -94,9 +99,29 @@ public sealed class SupportTicketsController : ControllerBase
                 JiraIssueUrl = jiraResult.IssueUrl,
                 JiraRawResponse = jiraResult.RawResponse,
                 JiraSuccess = jiraResult.Success,
-                CreatedAtUtc = DateTime.UtcNow
+                CreatedAtUtc = createdAtUtc
             },
             cancellationToken);
+
+        if (jiraResult.Success)
+        {
+            await _emailService.SendSuccessNotificationsAsync(
+                new SupportTicketEmailContext
+                {
+                    TicketId = id,
+                    TenantId = tenantId.Value,
+                    CallerEmail = callerEmail,
+                    SupportCategory = request.SupportCategory,
+                    Priorty = request.Priorty,
+                    PreferredContact = request.PreferredContact,
+                    PhoneNO = request.PhoneNO,
+                    RequestDescription = request.RequestDescription,
+                    JiraIssueKey = jiraResult.IssueKey,
+                    JiraIssueUrl = jiraResult.IssueUrl,
+                    CreatedAtUtc = createdAtUtc
+                },
+                cancellationToken);
+        }
 
         return StatusCode(
             StatusCodes.Status201Created,
