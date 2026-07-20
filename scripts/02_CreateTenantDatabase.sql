@@ -730,7 +730,49 @@ END
 GO
 
 -- =============================================
--- PART 5: EF MIGRATIONS HISTORY
+-- PART 5: CONNECTOR (modern OAuth — tenant DB)
+-- =============================================
+
+PRINT '';
+PRINT '=== Creating dbo.connector (modern OAuth schema) ===';
+PRINT '';
+
+IF OBJECT_ID(N'[dbo].[connector]', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[connector] (
+        [Id] UNIQUEIDENTIFIER NOT NULL CONSTRAINT [PK_connector] PRIMARY KEY,
+        [Name] NVARCHAR(256) NOT NULL,
+        [ProviderCode] NVARCHAR(64) NOT NULL,
+        [ConfigJson] NVARCHAR(MAX) NULL,
+        [AccessToken] NVARCHAR(MAX) NULL,
+        [RefreshToken] NVARCHAR(MAX) NULL,
+        [TokenExpiresAtUtc] DATETIME2(3) NULL,
+        [ExternalAccountEmail] NVARCHAR(320) NULL,
+        [ExternalAccountId] NVARCHAR(256) NULL,
+        [OAuthStatus] NVARCHAR(32) NOT NULL CONSTRAINT [DF_connector_OAuthStatus] DEFAULT (N'Pending'),
+        [IsDefault] BIT NOT NULL CONSTRAINT [DF_connector_IsDefault] DEFAULT (0),
+        [CreatedAtUtc] DATETIME2(3) NOT NULL CONSTRAINT [DF_connector_CreatedAtUtc] DEFAULT (SYSUTCDATETIME()),
+        [ModifiedAtUtc] DATETIME2(3) NULL,
+        [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
+        [ModifiedBy] UNIQUEIDENTIFIER NULL,
+        [IsDeleted] BIT NOT NULL CONSTRAINT [DF_connector_IsDeleted] DEFAULT (0)
+    );
+    CREATE INDEX [IX_connector_IsDeleted] ON [dbo].[connector] ([IsDeleted]);
+    CREATE INDEX [IX_connector_ProviderCode] ON [dbo].[connector] ([ProviderCode]) WHERE [IsDeleted] = 0;
+    PRINT '✓ dbo.connector created (modern schema)';
+END
+ELSE IF COL_LENGTH('dbo.connector', 'ProviderCode') IS NULL
+BEGIN
+    PRINT '⚠ Legacy dbo.connector detected. Run scripts/Create-Connector-Table.sql to migrate to modern schema.';
+END
+ELSE
+BEGIN
+    PRINT '✓ dbo.connector already exists (modern schema)';
+END
+GO
+
+-- =============================================
+-- PART 6: EF MIGRATIONS HISTORY
 -- =============================================
 
 PRINT '';
@@ -790,6 +832,13 @@ FROM sys.tables
 WHERE schema_id = SCHEMA_ID('workflow')
 ORDER BY name;
 
+PRINT '';
+PRINT '=== dbo.connector ===';
+IF OBJECT_ID(N'dbo.connector', N'U') IS NOT NULL
+    PRINT '✓ dbo.connector present (OAuth columns: accessToken, refreshToken, oauthStatus, ...)';
+ELSE
+    PRINT '⚠ dbo.connector missing';
+
 DECLARE @WorkflowTableCount INT;
 SELECT @WorkflowTableCount = COUNT(*) 
 FROM sys.tables 
@@ -809,6 +858,7 @@ BEGIN
     PRINT '2. Create users in users.Users table';
     PRINT '3. Create workflows in workflow.Workflows table';
     PRINT '4. Publish workflows to create dynamic tables (9 per workflow)';
+    PRINT '5. Connect OAuth providers via POST /api/connector/oauth/authorize';
 END
 ELSE
 BEGIN

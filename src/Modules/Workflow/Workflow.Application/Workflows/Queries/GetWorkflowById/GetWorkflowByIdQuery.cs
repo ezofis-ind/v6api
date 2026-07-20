@@ -20,7 +20,10 @@ public record GetWorkflowByIdQueryResult(
     IReadOnlyList<WorkflowStepItem> Steps,
     JsonElement? WorkflowJson = null,
     string? RepositoryId = null,
-    string? FormId = null);
+    string? FormId = null,
+    Guid? EmailIngestMailboxId = null,
+    Guid? EmailConnectorId = null,
+    bool EmailIngestEnabled = false);
 
 /// <summary>Workflow step summary.</summary>
 public record WorkflowStepItem(Guid Id, string Name, string? Description, StepType StepType, int Order, bool IsRequired, Guid? AssignedToUserId, string? AssignedToRole, string? ActivityId = null, string? StageType = null);

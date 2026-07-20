@@ -129,7 +129,8 @@ public record WorkflowFileChecklistDto(
 );
 
 public record WorkflowMailInitiateDto(
-    int? ConnectorId = null,
+    [property: JsonConverter(typeof(FlexibleWorkflowIdJsonConverter))]
+    FlexibleWorkflowId? ConnectorId = null,
     string? Review = null
 );
 

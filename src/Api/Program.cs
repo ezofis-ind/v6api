@@ -20,6 +20,7 @@ using SaaSApp.Users.Application;
 using SaaSApp.Users.Infrastructure;
 using SaaSApp.Workflow.Application;
 using SaaSApp.Workflow.Infrastructure;
+using SaaSApp.Workflow.Infrastructure.Jobs;
 using SaaSApp.Dms.Infrastructure;
 using Serilog;
 using System.Reflection;
@@ -329,6 +330,11 @@ app.MapHealthChecks("/health");
 if (hangfireEnabled)
 {
     app.MapHangfireDashboard("/hangfire");
+    RecurringJob.AddOrUpdate<RunEmailIngestPollJob>(
+        "email-ingest-poll",
+        job => job.Execute(null),
+        Cron.Minutely);
+    Log.Information("Registered Hangfire recurring job email-ingest-poll (every minute; per-mailbox interval still applies)");
 }
 
 try
