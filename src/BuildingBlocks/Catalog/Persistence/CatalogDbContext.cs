@@ -18,6 +18,7 @@ public sealed class CatalogDbContext : DbContext
     public DbSet<OtpVerification> OtpVerifications => Set<OtpVerification>();
     public DbSet<RepositoryItemShare> RepositoryItemShares => Set<RepositoryItemShare>();
     public DbSet<CreditMaster> CreditMasters => Set<CreditMaster>();
+    public DbSet<ConnectorProvider> ConnectorProviders => Set<ConnectorProvider>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -126,6 +127,25 @@ public sealed class CatalogDbContext : DbContext
             entity.Property(e => e.CreatedBy).HasColumnName("createdBy");
             entity.Property(e => e.ModifiedAt).HasColumnName("modifiedAt");
             entity.Property(e => e.IsDeleted).HasColumnName("isDeleted");
+        });
+
+        modelBuilder.Entity<ConnectorProvider>(entity =>
+        {
+            entity.ToTable("ConnectorProviders");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ProviderCode).HasMaxLength(64).IsRequired();
+            entity.Property(e => e.DisplayName).HasMaxLength(128).IsRequired();
+            entity.Property(e => e.ClientId).HasMaxLength(512).IsRequired();
+            entity.Property(e => e.ClientSecret).HasMaxLength(1024).IsRequired();
+            entity.Property(e => e.AuthUrl).HasMaxLength(1024).IsRequired();
+            entity.Property(e => e.TokenUrl).HasMaxLength(1024).IsRequired();
+            entity.Property(e => e.Scopes).HasMaxLength(2000).IsRequired();
+            entity.Property(e => e.RedirectUri).HasMaxLength(1024).IsRequired();
+            entity.Property(e => e.ExtraConfigJson);
+            entity.Property(e => e.IsActive);
+            entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.ModifiedAtUtc);
+            entity.HasIndex(e => e.ProviderCode).IsUnique();
         });
     }
 }

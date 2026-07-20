@@ -1,4 +1,5 @@
 using MediatR;
+using SaaSApp.Workflow.Application.Workflows;
 using SaaSApp.Workflow.Application.Workflows.Commands.CreateWorkflow;
 using SaaSApp.Workflow.Domain.Enums;
 
@@ -14,7 +15,13 @@ public record UpdateWorkflowCommand(
     WorkflowJsonDto? WorkflowJson = null,
     bool PublishImmediately = false,
     /// <summary>Original designer JSON as sent by the client (stored in blob verbatim when set).</summary>
-    string? WorkflowJsonRaw = null) : IRequest<UpdateWorkflowCommandResult>;
+    string? WorkflowJsonRaw = null,
+    WorkflowEmailIngestOptions? EmailIngest = null) : IRequest<UpdateWorkflowCommandResult>;
 
 /// <summary>Whether the workflow was found and updated. <see cref="NameConflict"/> matches v5 406 when renaming to an existing workflow name.</summary>
-public record UpdateWorkflowCommandResult(bool Found, bool NameConflict = false);
+public record UpdateWorkflowCommandResult(
+    bool Found,
+    bool NameConflict = false,
+    Guid? EmailIngestMailboxId = null,
+    Guid? EmailConnectorId = null,
+    bool EmailIngestEnabled = false);

@@ -22,6 +22,7 @@ public sealed class UpdateWorkflowCommandHandler : IRequestHandler<UpdateWorkflo
     private readonly IWorkflowSlaService _slaService;
     private readonly IWorkflowMlService _mlService;
     private readonly IWorkflowStepSyncService _stepSyncService;
+    private readonly IWorkflowEmailIngestLinker _emailIngestLinker;
 
     public UpdateWorkflowCommandHandler(
         IWorkflowRepository repository,
@@ -34,7 +35,8 @@ public sealed class UpdateWorkflowCommandHandler : IRequestHandler<UpdateWorkflo
         IWorkflowInitiationService initiationService,
         IWorkflowSlaService slaService,
         IWorkflowMlService mlService,
-        IWorkflowStepSyncService stepSyncService)
+        IWorkflowStepSyncService stepSyncService,
+        IWorkflowEmailIngestLinker emailIngestLinker)
     {
         _repository = repository;
         _unitOfWork = unitOfWork;
@@ -47,6 +49,7 @@ public sealed class UpdateWorkflowCommandHandler : IRequestHandler<UpdateWorkflo
         _slaService = slaService;
         _mlService = mlService;
         _stepSyncService = stepSyncService;
+        _emailIngestLinker = emailIngestLinker;
     }
 
     public async Task<UpdateWorkflowCommandResult> Handle(UpdateWorkflowCommand request, CancellationToken cancellationToken)
@@ -62,7 +65,19 @@ public sealed class UpdateWorkflowCommandHandler : IRequestHandler<UpdateWorkflo
         workflow.Update(request.Name, request.Description, request.TriggerType, request.TriggerConfig, userId);
         _repository.Update(workflow);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
-        return new UpdateWorkflowCommandResult(true);
+
+        var emailLink = await _emailIngestLinker.SyncAsync(
+            workflow.Id,
+            null,
+            null,
+            request.EmailIngest,
+            cancellationToken);
+
+        return new UpdateWorkflowCommandResult(
+            true,
+            EmailIngestMailboxId: emailLink.EmailIngestMailboxId,
+            EmailConnectorId: emailLink.EmailConnectorId,
+            EmailIngestEnabled: emailLink.EmailIngestEnabled);
     }
 
     private async Task<UpdateWorkflowCommandResult> HandleFullJsonUpdateAsync(
@@ -188,6 +203,17 @@ public sealed class UpdateWorkflowCommandHandler : IRequestHandler<UpdateWorkflo
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        return new UpdateWorkflowCommandResult(true);
+        var emailLink = await _emailIngestLinker.SyncAsync(
+            workflow.Id,
+            json,
+            request.WorkflowJsonRaw,
+            request.EmailIngest,
+            cancellationToken);
+
+        return new UpdateWorkflowCommandResult(
+            true,
+            EmailIngestMailboxId: emailLink.EmailIngestMailboxId,
+            EmailConnectorId: emailLink.EmailConnectorId,
+            EmailIngestEnabled: emailLink.EmailIngestEnabled);
     }
 }

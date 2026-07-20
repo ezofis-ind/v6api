@@ -22,6 +22,7 @@ public sealed class CreateWorkflowCommandHandler : IRequestHandler<CreateWorkflo
     private readonly IWorkflowSlaService _slaService;
     private readonly IWorkflowMlService _mlService;
     private readonly IWorkflowStepSyncService _stepSyncService;
+    private readonly IWorkflowEmailIngestLinker _emailIngestLinker;
 
     public CreateWorkflowCommandHandler(
         IWorkflowRepository repository,
@@ -34,7 +35,8 @@ public sealed class CreateWorkflowCommandHandler : IRequestHandler<CreateWorkflo
         IWorkflowInitiationService initiationService,
         IWorkflowSlaService slaService,
         IWorkflowMlService mlService,
-        IWorkflowStepSyncService stepSyncService)
+        IWorkflowStepSyncService stepSyncService,
+        IWorkflowEmailIngestLinker emailIngestLinker)
     {
         _repository = repository;
         _unitOfWork = unitOfWork;
@@ -47,6 +49,7 @@ public sealed class CreateWorkflowCommandHandler : IRequestHandler<CreateWorkflo
         _slaService = slaService;
         _mlService = mlService;
         _stepSyncService = stepSyncService;
+        _emailIngestLinker = emailIngestLinker;
     }
 
     public async Task<CreateWorkflowCommandResult> Handle(CreateWorkflowCommand request, CancellationToken cancellationToken)
@@ -180,7 +183,24 @@ public sealed class CreateWorkflowCommandHandler : IRequestHandler<CreateWorkflo
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        return new CreateWorkflowCommandResult(workflow.Id, isPublished, repositoryLegacyInt, repositoryGuid, formLegacyInt, formGuid);
+        // Step 13: Link Gmail/Outlook connector → EmailIngestMailbox when EMAIL initiate
+        var emailLink = await _emailIngestLinker.SyncAsync(
+            workflow.Id,
+            request.WorkflowJson,
+            request.WorkflowJsonRaw,
+            request.EmailIngest,
+            cancellationToken);
+
+        return new CreateWorkflowCommandResult(
+            workflow.Id,
+            isPublished,
+            repositoryLegacyInt,
+            repositoryGuid,
+            formLegacyInt,
+            formGuid,
+            emailLink.EmailIngestMailboxId,
+            emailLink.EmailConnectorId,
+            emailLink.EmailIngestEnabled);
     }
 
     /// <summary>Create sub-workflow link tables.</summary>

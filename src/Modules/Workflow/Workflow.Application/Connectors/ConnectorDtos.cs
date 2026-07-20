@@ -3,33 +3,28 @@ namespace SaaSApp.Workflow.Application.Connectors;
 public sealed record ConnectorDto(
     Guid Id,
     Guid TenantId,
-    string? Name,
-    string? ConnectorType,
-    string? CredentialJson,
-    string? DynamicCredentialJson,
-    string? ResponseStatus,
-    string? ResponseStatusCode,
-    string? ResponseBody,
-    string? CreatedAt,
-    string? ModifiedAt,
-    string CreatedBy,
-    string? ModifiedBy,
+    string Name,
+    string ProviderCode,
+    string? ConfigJson,
+    string OAuthStatus,
+    string? ExternalAccountEmail,
+    DateTime? TokenExpiresAtUtc,
+    bool IsDefault,
+    DateTime CreatedAtUtc,
+    DateTime? ModifiedAtUtc,
+    Guid CreatedBy,
+    Guid? ModifiedBy,
     bool IsDeleted,
-    bool Preference = false,
     string? CreatedByEmail = null,
     string? ModifiedByEmail = null);
 
 public sealed record ConnectorUpsertRequest(
     string? Name,
-    string? ConnectorType,
-    string? CredentialJson,
-    string? DynamicCredentialJson,
-    string? ResponseStatus,
-    string? ResponseStatusCode,
-    string? ResponseBody,
-    bool? Preference = null);
+    string? ProviderCode,
+    string? ConfigJson,
+    bool? IsDefault = null);
 
-/// <summary>v5 POST /api/connector/all body (insCriteriawithFilter).</summary>
+/// <summary>Filter/list body for POST /api/connector/all.</summary>
 public sealed record ConnectorListRequest(
     List<ConnectorFilterGroup>? FilterBy = null,
     string Mode = "browse");

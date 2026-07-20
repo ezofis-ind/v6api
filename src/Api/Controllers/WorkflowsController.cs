@@ -7,6 +7,7 @@ using SaaSApp.MultiTenancy;
 using SaaSApp.Security;
 using System.Text.Json;
 using System.Security.Claims;
+using SaaSApp.Workflow.Application.Workflows;
 using SaaSApp.Workflow.Application.Workflows.Commands.AddWorkflowStep;
 using SaaSApp.Workflow.Application.Workflows.Commands.CreateWorkflow;
 using WorkflowJsonDto = SaaSApp.Workflow.Application.Workflows.Commands.CreateWorkflow.WorkflowJsonDto;
@@ -134,6 +135,7 @@ public sealed class WorkflowsController : ControllerBase
         var workflowJsonRaw = WorkflowJsonBodyHelper.ExtractDesignerJsonRaw(root);
 
         CreateWorkflowCommand command;
+        var emailFromBody = WorkflowEmailIngestOptionsHelper.FromJsonElement(root);
 
         // Accept: wrapper { workflowJson }, designer { Settings/Blocks } (PascalCase or camelCase), or simple { name }
         if (WorkflowJsonBodyHelper.HasWorkflowJsonWrapper(root))
@@ -141,6 +143,12 @@ public sealed class WorkflowsController : ControllerBase
             var request = JsonSerializer.Deserialize<CreateWorkflowRequest>(raw, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (request == null)
                 return BadRequest(new { error = "Invalid request payload." });
+
+            var emailOpts = WorkflowEmailIngestOptionsHelper.Merge(
+                emailFromBody,
+                WorkflowEmailIngestOptionsHelper.FromRequest(
+                    request.EmailConnectorId, request.EmailIsEnabled, request.EmailPollIntervalMinutes,
+                    request.EmailQueryFilter, request.MasterSource, request.MasterFormId, request.MasterConnectorId));
 
             if (request.WorkflowJson != null)
             {
@@ -152,7 +160,8 @@ public sealed class WorkflowsController : ControllerBase
                     request.TriggerConfig,
                     request.WorkflowJson,
                     request.PublishImmediately || WorkflowJsonBodyHelper.IsPublished(request.WorkflowJson),
-                    workflowJsonRaw);
+                    workflowJsonRaw,
+                    emailOpts);
             }
             else
             {
@@ -165,7 +174,8 @@ public sealed class WorkflowsController : ControllerBase
                     request.TriggerType,
                     request.TriggerConfig,
                     null,
-                    false);
+                    false,
+                    EmailIngest: emailOpts);
             }
         }
         else if (WorkflowJsonBodyHelper.IsDesignerPayload(root))
@@ -181,13 +191,20 @@ public sealed class WorkflowsController : ControllerBase
                 null,
                 workflowJson,
                 WorkflowJsonBodyHelper.IsPublished(workflowJson),
-                workflowJsonRaw);
+                workflowJsonRaw,
+                emailFromBody);
         }
         else
         {
             var request = JsonSerializer.Deserialize<CreateWorkflowRequest>(raw, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (request == null)
                 return BadRequest(new { error = "Invalid request payload." });
+
+            var emailOpts = WorkflowEmailIngestOptionsHelper.Merge(
+                emailFromBody,
+                WorkflowEmailIngestOptionsHelper.FromRequest(
+                    request.EmailConnectorId, request.EmailIsEnabled, request.EmailPollIntervalMinutes,
+                    request.EmailQueryFilter, request.MasterSource, request.MasterFormId, request.MasterConnectorId));
 
             if (request.WorkflowJson != null)
             {
@@ -198,7 +215,8 @@ public sealed class WorkflowsController : ControllerBase
                     request.TriggerConfig,
                     request.WorkflowJson,
                     request.PublishImmediately,
-                    workflowJsonRaw);
+                    workflowJsonRaw,
+                    emailOpts);
             }
             else if (string.IsNullOrWhiteSpace(request.Name))
                 return BadRequest(new { error = "Workflow name is required. Send Settings.General.Name or name in the body." });
@@ -210,12 +228,20 @@ public sealed class WorkflowsController : ControllerBase
                     request.TriggerType,
                     request.TriggerConfig,
                     null,
-                    false);
+                    false,
+                    EmailIngest: emailOpts);
             }
         }
 
-        var result = await _mediator.Send(command, cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id = result.WorkflowId }, result);
+        try
+        {
+            var result = await _mediator.Send(command, cancellationToken);
+            return CreatedAtAction(nameof(GetById), new { id = result.WorkflowId }, result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
 
@@ -751,12 +777,19 @@ public sealed class WorkflowsController : ControllerBase
         var root = body;
         var raw = root.GetRawText();
         var workflowJsonRaw = WorkflowJsonBodyHelper.ExtractDesignerJsonRaw(root);
+        var emailFromBody = WorkflowEmailIngestOptionsHelper.FromJsonElement(root);
 
         if (WorkflowJsonBodyHelper.HasWorkflowJsonWrapper(root))
         {
             var request = JsonSerializer.Deserialize<UpdateWorkflowRequest>(raw, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (request == null)
                 return BadRequest(new { error = "Invalid request payload." });
+
+            var emailOpts = WorkflowEmailIngestOptionsHelper.Merge(
+                emailFromBody,
+                WorkflowEmailIngestOptionsHelper.FromRequest(
+                    request.EmailConnectorId, request.EmailIsEnabled, request.EmailPollIntervalMinutes,
+                    request.EmailQueryFilter, request.MasterSource, request.MasterFormId, request.MasterConnectorId));
 
             command = new UpdateWorkflowCommand(
                 id,
@@ -766,7 +799,8 @@ public sealed class WorkflowsController : ControllerBase
                 request.TriggerConfig,
                 request.WorkflowJson,
                 request.PublishImmediately,
-                workflowJsonRaw);
+                workflowJsonRaw,
+                emailOpts);
         }
         else if (WorkflowJsonBodyHelper.IsDesignerPayload(root))
         {
@@ -778,7 +812,8 @@ public sealed class WorkflowsController : ControllerBase
                 id,
                 WorkflowJson: workflowJson,
                 PublishImmediately: WorkflowJsonBodyHelper.IsPublished(workflowJson),
-                WorkflowJsonRaw: workflowJsonRaw);
+                WorkflowJsonRaw: workflowJsonRaw,
+                EmailIngest: emailFromBody);
         }
         else
         {
@@ -786,6 +821,12 @@ public sealed class WorkflowsController : ControllerBase
             var request = JsonSerializer.Deserialize<UpdateWorkflowRequest>(raw, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (request == null)
                 return BadRequest(new { error = "Invalid request payload." });
+
+            var emailOpts = WorkflowEmailIngestOptionsHelper.Merge(
+                emailFromBody,
+                WorkflowEmailIngestOptionsHelper.FromRequest(
+                    request.EmailConnectorId, request.EmailIsEnabled, request.EmailPollIntervalMinutes,
+                    request.EmailQueryFilter, request.MasterSource, request.MasterFormId, request.MasterConnectorId));
 
             command = new UpdateWorkflowCommand(
                 id,
@@ -795,15 +836,23 @@ public sealed class WorkflowsController : ControllerBase
                 request.TriggerConfig,
                 request.WorkflowJson,
                 request.PublishImmediately,
-                workflowJsonRaw);
+                workflowJsonRaw,
+                emailOpts);
         }
 
-        var result = await _mediator.Send(command, cancellationToken);
-        if (!result.Found)
-            return NotFound();
-        if (result.NameConflict)
-            return StatusCode(StatusCodes.Status406NotAcceptable, new { error = "Workflow name already exists." });
-        return NoContent();
+        try
+        {
+            var result = await _mediator.Send(command, cancellationToken);
+            if (!result.Found)
+                return NotFound();
+            if (result.NameConflict)
+                return StatusCode(StatusCodes.Status406NotAcceptable, new { error = "Workflow name already exists." });
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
 
@@ -2023,7 +2072,14 @@ public record CreateWorkflowRequest(
     TriggerType TriggerType, 
     string? TriggerConfig = null,
     WorkflowJsonDto? WorkflowJson = null,  // Full workflow JSON from source API
-    bool PublishImmediately = false
+    bool PublishImmediately = false,
+    Guid? EmailConnectorId = null,
+    bool? EmailIsEnabled = null,
+    int? EmailPollIntervalMinutes = null,
+    string? EmailQueryFilter = null,
+    string? MasterSource = null,
+    string? MasterFormId = null,
+    Guid? MasterConnectorId = null
 );
 
 /// <summary>Request to add a step to a workflow.</summary>
@@ -2036,7 +2092,14 @@ public record UpdateWorkflowRequest(
     TriggerType? TriggerType = null,
     string? TriggerConfig = null,
     WorkflowJsonDto? WorkflowJson = null,
-    bool PublishImmediately = false);
+    bool PublishImmediately = false,
+    Guid? EmailConnectorId = null,
+    bool? EmailIsEnabled = null,
+    int? EmailPollIntervalMinutes = null,
+    string? EmailQueryFilter = null,
+    string? MasterSource = null,
+    string? MasterFormId = null,
+    Guid? MasterConnectorId = null);
 
 /// <summary>Request to start a workflow instance.</summary>
 public record StartWorkflowRequest(

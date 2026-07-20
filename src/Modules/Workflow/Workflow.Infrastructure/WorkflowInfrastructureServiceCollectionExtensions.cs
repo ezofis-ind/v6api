@@ -8,6 +8,7 @@ using SaaSApp.Workflow.Infrastructure.Jobs;
 using SaaSApp.Workflow.Infrastructure.Options;
 using SaaSApp.Workflow.Infrastructure.Persistence;
 using SaaSApp.Workflow.Infrastructure.Services;
+using SaaSApp.Workflow.Infrastructure.Services.ConnectorAdapters;
 
 namespace SaaSApp.Workflow.Infrastructure;
 
@@ -64,6 +65,20 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IFormEntryService, FormEntryService>();
         services.AddScoped<IFormMasterFileUploadService, FormMasterFileUploadService>();
         services.AddScoped<IConnectorService, ConnectorService>();
+        services.Configure<ConnectorOAuthOptions>(configuration.GetSection(ConnectorOAuthOptions.SectionName));
+        services.AddHttpClient(nameof(IConnectorProviderAdapter));
+        services.AddScoped<IConnectorProviderAdapter, GcpConnectorAdapter>();
+        services.AddScoped<IConnectorProviderAdapter, GmailConnectorAdapter>();
+        services.AddScoped<IConnectorProviderAdapter, OutlookConnectorAdapter>();
+        services.AddScoped<IConnectorProviderAdapter, OneDriveConnectorAdapter>();
+        services.AddScoped<IConnectorProviderAdapter, TeamsConnectorAdapter>();
+        services.AddScoped<IConnectorProviderAdapter, DropboxConnectorAdapter>();
+        services.AddScoped<IConnectorProviderAdapter, QuickBooksConnectorAdapter>();
+        services.AddScoped<IConnectorOAuthService, ConnectorOAuthService>();
+        services.AddScoped<IEmailIngestService, EmailIngestService>();
+        services.AddScoped<IWorkflowEmailIngestLinker, WorkflowEmailIngestLinker>();
+        services.AddScoped<IMasterResolveService, MasterResolveService>();
+        services.AddScoped<RunEmailIngestPollJob>();
         services.AddScoped<IWorkflowSecurityService, WorkflowSecurityService>();
         services.AddScoped<IWorkflowInitiationService, WorkflowInitiationService>();
         services.AddScoped<IWorkflowSlaService, WorkflowSlaService>();

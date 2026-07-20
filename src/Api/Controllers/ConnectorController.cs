@@ -12,9 +12,13 @@ namespace SaaSApp.Api.Controllers;
 public sealed class ConnectorController : ControllerBase
 {
     private readonly IConnectorService _connectorService;
+    private readonly IConnectorOAuthService _oauthService;
 
-    public ConnectorController(IConnectorService connectorService) =>
+    public ConnectorController(IConnectorService connectorService, IConnectorOAuthService oauthService)
+    {
         _connectorService = connectorService;
+        _oauthService = oauthService;
+    }
 
     /// <summary>Create a new connector (v5 POST /api/connector).</summary>
     [HttpPost]
@@ -85,6 +89,386 @@ public sealed class ConnectorController : ControllerBase
             return Ok(new ConnectorListResponse(items));
         }
         catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>List active OAuth providers from Catalog (no secrets).</summary>
+    [HttpGet("providers")]
+    [ProducesResponseType(typeof(IReadOnlyList<ConnectorProviderPublicDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListProviders(CancellationToken cancellationToken)
+    {
+        var items = await _oauthService.ListProvidersAsync(cancellationToken);
+        return Ok(items);
+    }
+
+    /// <summary>Start OAuth: returns authorizationUrl to open in browser.</summary>
+    [HttpPost("oauth/authorize")]
+    [ProducesResponseType(typeof(ConnectorOAuthAuthorizeResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Authorize([FromBody] ConnectorOAuthAuthorizeRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _oauthService.BeginAuthorizeAsync(request, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>OAuth callback from provider. Anonymous — validated via signed state.</summary>
+    [HttpGet("oauth/callback")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status302Found)]
+    public async Task<IActionResult> OAuthCallback(
+        [FromQuery] string? code,
+        [FromQuery] string? state,
+        [FromQuery] string? error,
+        [FromQuery] string? realmId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var redirectUrl = await _oauthService.CompleteCallbackAsync(code, state, error, realmId, cancellationToken);
+            return Redirect(redirectUrl);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Force refresh access token.</summary>
+    [HttpPost("{id:guid}/oauth/refresh")]
+    [ProducesResponseType(typeof(ConnectorOAuthStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Refresh(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var status = await _oauthService.RefreshAsync(id, cancellationToken);
+            return status == null ? NotFound() : Ok(status);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Clear tokens and mark connector as Revoked.</summary>
+    [HttpPost("{id:guid}/disconnect")]
+    [ProducesResponseType(typeof(ConnectorOAuthStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Disconnect(Guid id, CancellationToken cancellationToken)
+    {
+        var status = await _oauthService.DisconnectAsync(id, cancellationToken);
+        return status == null ? NotFound() : Ok(status);
+    }
+
+    /// <summary>OAuth connection status (no token values).</summary>
+    [HttpGet("{id:guid}/status")]
+    [ProducesResponseType(typeof(ConnectorOAuthStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Status(Guid id, CancellationToken cancellationToken)
+    {
+        var status = await _oauthService.GetStatusAsync(id, cancellationToken);
+        return status == null ? NotFound() : Ok(status);
+    }
+
+    /// <summary>List files/folders for a connected storage connector.</summary>
+    [HttpGet("{id:guid}/files")]
+    [ProducesResponseType(typeof(ConnectorFileListResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListFiles(Guid id, [FromQuery] string? path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _oauthService.ListFilesAsync(id, path, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Upload a file to the connected storage provider.</summary>
+    [HttpPost("{id:guid}/files/upload")]
+    [DisableRequestSizeLimit]
+    [RequestFormLimits(MultipartBodyLengthLimit = 104_857_600)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> UploadFile(
+        Guid id,
+        IFormFile? file,
+        [FromForm] string? path,
+        CancellationToken cancellationToken)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new { error = "No file received." });
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            await _oauthService.UploadFileAsync(
+                id,
+                path ?? string.Empty,
+                file.FileName,
+                stream,
+                file.ContentType,
+                cancellationToken);
+            return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Download a file from the connected storage provider.</summary>
+    [HttpGet("{id:guid}/files/download")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> DownloadFile(Guid id, [FromQuery] string path, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { error = "path is required." });
+
+        try
+        {
+            var (content, contentType, fileName) = await _oauthService.DownloadFileAsync(id, path, cancellationToken);
+            return File(content, contentType, fileName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>INBOX total and unread counts (GMAIL or OUTLOOK).</summary>
+    [HttpGet("{id:guid}/mail/summary")]
+    [HttpGet("{id:guid}/gmail/summary")]
+    [ProducesResponseType(typeof(ConnectorMailSummaryDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetMailSummary(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _oauthService.GetMailSummaryAsync(id, cancellationToken));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>List mail messages (GMAIL or OUTLOOK connectors).</summary>
+    [HttpGet("{id:guid}/gmail/messages")]
+    [HttpGet("{id:guid}/mail/messages")]
+    [ProducesResponseType(typeof(ConnectorGmailMessageListResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListGmailMessages(
+        Guid id,
+        [FromQuery] int maxResults = 20,
+        [FromQuery] string? query = null,
+        [FromQuery] bool unreadOnly = false,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _oauthService.ListGmailMessagesAsync(id, maxResults, query, unreadOnly, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Newest inbox message (optionally unread only).</summary>
+    [HttpGet("{id:guid}/mail/messages/top")]
+    [HttpGet("{id:guid}/gmail/messages/top")]
+    [ProducesResponseType(typeof(ConnectorGmailMessageDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> GetTopMailMessage(
+        Guid id,
+        [FromQuery] bool unreadOnly = true,
+        [FromQuery] string? query = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _oauthService.GetTopMailMessageAsync(id, unreadOnly, query, cancellationToken);
+            return result == null ? NoContent() : Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Get one mail message with body and attachments (GMAIL or OUTLOOK).</summary>
+    [HttpGet("{id:guid}/mail/messages/{messageId}")]
+    [HttpGet("{id:guid}/gmail/messages/{messageId}")]
+    [ProducesResponseType(typeof(ConnectorGmailMessageDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetMailMessage(Guid id, string messageId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _oauthService.GetMailMessageAsync(id, messageId, cancellationToken));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Mark a mail message as read. Requires gmail.modify / Mail.ReadWrite (re-authorize after scope bump).</summary>
+    [HttpPost("{id:guid}/mail/messages/{messageId}/read")]
+    [HttpPost("{id:guid}/gmail/messages/{messageId}/read")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> MarkMailMessageRead(Guid id, string messageId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _oauthService.MarkMailMessageReadAsync(id, messageId, cancellationToken);
+            return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Download a mail attachment (GMAIL or OUTLOOK).</summary>
+    [HttpGet("{id:guid}/gmail/messages/{messageId}/attachments/{attachmentId}")]
+    [HttpGet("{id:guid}/mail/messages/{messageId}/attachments/{attachmentId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> DownloadGmailAttachment(
+        Guid id,
+        string messageId,
+        string attachmentId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (content, contentType, fileName) = await _oauthService.DownloadGmailAttachmentAsync(
+                id, messageId, attachmentId, cancellationToken);
+            return File(content, contentType, fileName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// List QuickBooks master records. masterType: Customer | Vendor | Item.
+    /// </summary>
+    [HttpGet("{id:guid}/quickbooks/masters")]
+    [ProducesResponseType(typeof(ConnectorQuickBooksMasterListResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListQuickBooksMasters(
+        Guid id,
+        [FromQuery] string masterType = "Customer",
+        [FromQuery] int maxResults = 50,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _oauthService.ListQuickBooksMastersAsync(id, masterType, maxResults, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// List QuickBooks documents. documentType: Invoice | Bill | PurchaseOrder | Estimate | SalesReceipt.
+    /// </summary>
+    [HttpGet("{id:guid}/quickbooks/documents")]
+    [ProducesResponseType(typeof(ConnectorQuickBooksDocumentListResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListQuickBooksDocuments(
+        Guid id,
+        [FromQuery] string documentType = "Invoice",
+        [FromQuery] int maxResults = 50,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _oauthService.ListQuickBooksDocumentsAsync(id, documentType, maxResults, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Download a QuickBooks document PDF (Invoice, Bill, PurchaseOrder, Estimate, SalesReceipt).</summary>
+    [HttpGet("{id:guid}/quickbooks/documents/{documentId}/pdf")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> DownloadQuickBooksDocumentPdf(
+        Guid id,
+        string documentId,
+        [FromQuery] string documentType = "Invoice",
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var (content, contentType, fileName) = await _oauthService.DownloadQuickBooksDocumentPdfAsync(
+                id, documentType, documentId, cancellationToken);
+            return File(content, contentType, fileName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
         {
             return BadRequest(new { error = ex.Message });
         }

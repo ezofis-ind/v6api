@@ -1,37 +1,11 @@
 -- =============================================
--- CATALOG DATABASE - CREATE DATABASE + CONNECTOR PROVIDERS
--- Run against master (or default connection)
--- Idempotent: safe to re-run.
+-- Catalog: ConnectorProviders (global OAuth app config)
+-- Run against catalog database (DefaultConnection).
+-- Secrets: UPDATE ClientId/ClientSecret after create — do not commit real secrets.
 -- =============================================
 
-IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'ezofis_catalog_Dev')
-BEGIN
-    PRINT 'Creating catalog database: ezofis_catalog_Dev';
-    CREATE DATABASE [ezofis_catalog_Dev];
-    PRINT '✓ Catalog database created';
-END
-ELSE
-BEGIN
-    PRINT '✓ Catalog database already exists';
-END
-GO
-
-USE [ezofis_catalog_Dev];
-GO
-
-PRINT '';
-PRINT '=== Ensuring catalog.ConnectorProviders (OAuth apps) ===';
-PRINT '';
-
 IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'catalog')
-BEGIN
     EXEC('CREATE SCHEMA [catalog]');
-    PRINT '✓ catalog schema created';
-END
-ELSE
-BEGIN
-    PRINT '✓ catalog schema already exists';
-END
 GO
 
 IF OBJECT_ID(N'[catalog].[ConnectorProviders]', N'U') IS NULL
@@ -52,15 +26,11 @@ BEGIN
         [ModifiedAtUtc] DATETIME2(3) NULL,
         CONSTRAINT [UQ_ConnectorProviders_ProviderCode] UNIQUE ([ProviderCode])
     );
-    PRINT '✓ catalog.ConnectorProviders created';
-END
-ELSE
-BEGIN
-    PRINT '✓ catalog.ConnectorProviders already exists';
+    PRINT 'catalog.ConnectorProviders created';
 END
 GO
 
--- Seed Phase-1 providers (empty ClientId/Secret — fill after create; do not commit secrets)
+-- Seed providers (empty ClientId/Secret — fill via UPDATE; do not commit secrets)
 MERGE [catalog].[ConnectorProviders] AS t
 USING (VALUES
     (N'GCP', N'Google Cloud Storage',
@@ -71,6 +41,10 @@ USING (VALUES
      N'https://accounts.google.com/o/oauth2/v2/auth',
      N'https://oauth2.googleapis.com/token',
      N'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email openid'),
+    (N'OUTLOOK', N'Office 365 Outlook',
+     N'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+     N'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+     N'offline_access openid profile email Mail.ReadWrite User.Read'),
     (N'ONEDRIVE', N'Microsoft OneDrive',
      N'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
      N'https://login.microsoftonline.com/common/oauth2/v2.0/token',
@@ -83,24 +57,38 @@ USING (VALUES
      N'https://www.dropbox.com/oauth2/authorize',
      N'https://api.dropboxapi.com/oauth2/token',
      N''),
-    (N'OUTLOOK', N'Office 365 Outlook',
-     N'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
-     N'https://login.microsoftonline.com/common/oauth2/v2.0/token',
-     N'offline_access openid profile email Mail.ReadWrite User.Read'),
     (N'QUICKBOOKS', N'QuickBooks',
      N'https://appcenter.intuit.com/connect/oauth2',
      N'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer',
      N'com.intuit.quickbooks.accounting openid profile email')
 ) AS s ([ProviderCode], [DisplayName], [AuthUrl], [TokenUrl], [Scopes])
 ON t.[ProviderCode] = s.[ProviderCode]
+WHEN MATCHED AND t.[ProviderCode] IN (N'GMAIL', N'OUTLOOK') THEN
+    UPDATE SET [Scopes] = s.[Scopes], [ModifiedAtUtc] = SYSUTCDATETIME()
 WHEN NOT MATCHED THEN
     INSERT ([Id], [ProviderCode], [DisplayName], [ClientId], [ClientSecret], [AuthUrl], [TokenUrl], [Scopes], [RedirectUri], [IsActive], [CreatedAtUtc])
     VALUES (NEWID(), s.[ProviderCode], s.[DisplayName], N'', N'', s.[AuthUrl], s.[TokenUrl], s.[Scopes], N'', 1, SYSUTCDATETIME());
 GO
 
-PRINT '✓ ConnectorProviders seed ensured (GCP, GMAIL, OUTLOOK, ONEDRIVE, TEAMS, DROPBOX, QUICKBOOKS)';
-PRINT '  Set ClientId / ClientSecret / RedirectUri, e.g.:';
-PRINT '  UPDATE catalog.ConnectorProviders SET ClientId=N''...'', ClientSecret=N''...'', RedirectUri=N''https://host/V6API/api/connector/oauth/callback'' WHERE ProviderCode=N''GCP'';';
-PRINT '';
-PRINT 'Next: run 01b_CreateCatalogTables.sql for Tenants / UserTenants.';
+-- Prefer renaming legacy email provider; if QUICKBOOKS already exists, deactivate the old code
+IF EXISTS (SELECT 1 FROM catalog.ConnectorProviders WHERE ProviderCode = N'QUICKBOOKS_EMAIL')
+   AND NOT EXISTS (SELECT 1 FROM catalog.ConnectorProviders WHERE ProviderCode = N'QUICKBOOKS')
+BEGIN
+    UPDATE catalog.ConnectorProviders
+    SET [ProviderCode] = N'QUICKBOOKS',
+        [DisplayName] = N'QuickBooks',
+        [Scopes] = N'com.intuit.quickbooks.accounting openid profile email',
+        [ModifiedAtUtc] = SYSUTCDATETIME()
+    WHERE [ProviderCode] = N'QUICKBOOKS_EMAIL';
+END
+ELSE IF EXISTS (SELECT 1 FROM catalog.ConnectorProviders WHERE ProviderCode = N'QUICKBOOKS_EMAIL')
+BEGIN
+    UPDATE catalog.ConnectorProviders
+    SET [IsActive] = 0,
+        [ModifiedAtUtc] = SYSUTCDATETIME()
+    WHERE [ProviderCode] = N'QUICKBOOKS_EMAIL';
+END
+GO
+
+PRINT 'Seed complete. Set ClientId, ClientSecret, RedirectUri per provider.';
 GO
