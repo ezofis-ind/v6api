@@ -113,6 +113,33 @@ Do **not** store Google/Microsoft/Intuit tokens in Python — call V6 with tenan
 4. Dedup in `EmailIngestProcessed`; mark message read only if at least one attachment started.
 5. Emails with no matching attachment stay unread.
 
+## QuickBooks × AP Agent (integration path)
+
+**Phase 1 — Master match (current; no Intuit tokens in Python)**
+
+1. Connect QuickBooks: `POST /api/connector/oauth/authorize` with `providerCode: "QUICKBOOKS"`.
+2. Create/update EMAIL workflow with `masterSource: "QuickBooks"` and `masterConnectorId: "<qbo-guid>"`.
+3. Email ingest passes `masterSource` / `masterConnectorId` in workflow start `Context` (see `EmailIngestService`).
+4. After OCR, Python AP Agent calls V6 only:
+
+```http
+GET /api/master/resolve?type=Vendor&source=QuickBooks&connectorId=<qbo-guid>&q=<extractedVendor>&maxResults=20
+Authorization: Bearer <JWT>
+X-Tenant-Id: <tenant-guid>
+```
+
+5. Auto-select vendor when one strong match; otherwise return candidates for UI review.
+
+**Phase 2 — Post Bill to QuickBooks (planned)**
+
+- New V6 endpoint: `POST /api/connector/{id}/quickbooks/bills` (VendorRef, lines, DocNumber).
+- Trigger on workflow approve/move-next when workflow config enables `postToQuickBooks`.
+- Python/UI still use JWT; never store QBO refresh tokens outside V6.
+
+**Phase 3 — Pull QBO documents as intake (later)**
+
+- Poll `GET /api/connector/{id}/quickbooks/documents` similar to email ingest.
+
 ## SQL
 
 - Tenant tables: `scripts/Create-EmailIngest-Tables.sql` (also auto-created on first API use).

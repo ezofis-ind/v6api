@@ -145,6 +145,20 @@ QuickBooks (provider code `QUICKBOOKS`):
 - `GET /api/connector/{id}/quickbooks/documents/{documentId}/pdf?documentType=Invoice`
 - Sandbox: set connector `configJson` to `{"environment":"sandbox"}`
 
+**Smoke test script:** `scripts/Test-QuickBooksConnector.ps1` (login + status + masters + documents + `master/resolve`). Requires SQL (`EZOFIS_DELL_I9` or your server) and API on `:5000`.
+
+```powershell
+.\scripts\Test-QuickBooksConnector.ps1 `
+  -ApiBase http://localhost:5000 `
+  -Email you@company.com `
+  -Password '***' `
+  -TenantId 0B3E1B77-4A6C-46F2-83EE-2F0A5B84956B `
+  -SqlServer EZOFIS_DELL_I9 `
+  -SqlPassword '***'
+```
+
+AP Agent × QuickBooks integration path: see [EMAIL_AP_AGENT_HANDOFF.md](EMAIL_AP_AGENT_HANDOFF.md#quickbooks--ap-agent-integration-path).
+
 ---
 
 ## Errors
