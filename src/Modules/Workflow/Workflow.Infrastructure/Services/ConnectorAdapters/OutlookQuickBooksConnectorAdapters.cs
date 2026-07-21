@@ -60,17 +60,28 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
         string accessToken, int maxResults, string? query, bool unreadOnly, CancellationToken cancellationToken = default)
     {
         maxResults = Math.Clamp(maxResults, 1, 50);
+        // Graph often rejects $filter+$search and $search+$orderby — pick a compatible query shape.
         var url =
             $"https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top={maxResults}" +
-            "&$select=id,conversationId,subject,from,bodyPreview,receivedDateTime,hasAttachments,isRead" +
-            "&$orderby=receivedDateTime desc";
-        if (unreadOnly)
-            url += "&$filter=isRead eq false";
+            "&$select=id,conversationId,subject,from,bodyPreview,receivedDateTime,hasAttachments,isRead";
+
         if (!string.IsNullOrWhiteSpace(query))
-            url += $"&$search=\"{query.Replace("\"", "\\\"")}\"";
+        {
+            var search = unreadOnly
+                ? $"isRead:false {query.Trim()}"
+                : query.Trim();
+            url += $"&$search=\"{search.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+        }
+        else
+        {
+            url += "&$orderby=receivedDateTime desc";
+            if (unreadOnly)
+                url += "&$filter=isRead eq false";
+        }
 
         using var client = CreateClient();
         using var listReq = AuthorizedGet(url, accessToken);
+        AddOutlookImmutableIdPrefer(listReq);
         using var listRes = await client.SendAsync(listReq, cancellationToken);
         var listBody = await listRes.Content.ReadAsStringAsync(cancellationToken);
         if (!listRes.IsSuccessStatusCode)
@@ -87,6 +98,11 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
             if (string.IsNullOrEmpty(id))
                 continue;
 
+            var isUnread = !(m.TryGetProperty("isRead", out var ir) && ir.ValueKind == JsonValueKind.True);
+            // Client-side guard when $search may not honor unread filter.
+            if (unreadOnly && !isUnread)
+                continue;
+
             string? from = null;
             if (m.TryGetProperty("from", out var fromEl) &&
                 fromEl.TryGetProperty("emailAddress", out var ea) &&
@@ -96,8 +112,6 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
             DateTime? received = m.TryGetProperty("receivedDateTime", out var rd) && DateTime.TryParse(rd.GetString(), out var dt)
                 ? dt.ToUniversalTime()
                 : null;
-
-            var isUnread = !(m.TryGetProperty("isRead", out var ir) && ir.ValueKind == JsonValueKind.True);
 
             var attachments = new List<(string, string?, string?, long?)>();
             var hasAttachments = m.TryGetProperty("hasAttachments", out var ha) && ha.GetBoolean();
@@ -129,6 +143,7 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
             $"https://graph.microsoft.com/v1.0/me/messages/{Uri.EscapeDataString(messageId)}" +
             "?$select=id,conversationId,subject,from,bodyPreview,body,receivedDateTime,hasAttachments,isRead",
             accessToken);
+        AddOutlookImmutableIdPrefer(req);
         using var res = await client.SendAsync(req, cancellationToken);
         var body = await res.Content.ReadAsStringAsync(cancellationToken);
         if (!res.IsSuccessStatusCode)
@@ -189,6 +204,7 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
             Content = new StringContent("""{"isRead":true}""", Encoding.UTF8, "application/json")
         };
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        AddOutlookImmutableIdPrefer(req);
         using var res = await client.SendAsync(req, cancellationToken);
         var body = await res.Content.ReadAsStringAsync(cancellationToken);
         if (!res.IsSuccessStatusCode)
@@ -202,6 +218,7 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
         using var metaReq = AuthorizedGet(
             $"https://graph.microsoft.com/v1.0/me/messages/{Uri.EscapeDataString(messageId)}/attachments/{Uri.EscapeDataString(attachmentId)}",
             accessToken);
+        AddOutlookImmutableIdPrefer(metaReq);
         using var metaRes = await client.SendAsync(metaReq, cancellationToken);
         var metaBody = await metaRes.Content.ReadAsStringAsync(cancellationToken);
         if (!metaRes.IsSuccessStatusCode)
@@ -243,8 +260,9 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
     {
         using var req = new HttpRequestMessage(
             HttpMethod.Get,
-            $"https://graph.microsoft.com/v1.0/me/messages/{Uri.EscapeDataString(messageId)}/attachments?$select=id,name,contentType,size");
+            $"https://graph.microsoft.com/v1.0/me/messages/{Uri.EscapeDataString(messageId)}/attachments?$select=id,name,contentType,size,isInline");
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        AddOutlookImmutableIdPrefer(req);
         using var res = await client.SendAsync(req, cancellationToken);
         if (!res.IsSuccessStatusCode)
             return;
@@ -256,6 +274,10 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
 
         foreach (var a in values.EnumerateArray())
         {
+            // Skip Outlook inline signature / embedded images.
+            if (a.TryGetProperty("isInline", out var inline) && inline.ValueKind == JsonValueKind.True)
+                continue;
+
             var id = a.GetProperty("id").GetString();
             if (string.IsNullOrEmpty(id))
                 continue;
@@ -265,6 +287,9 @@ internal sealed class OutlookConnectorAdapter : ConnectorProviderAdapterBase
             attachments.Add((id, name, mime, size));
         }
     }
+
+    private static void AddOutlookImmutableIdPrefer(HttpRequestMessage req) =>
+        req.Headers.TryAddWithoutValidation("Prefer", "IdType=\"ImmutableId\"");
 
     private static async Task<string?> TryGetGraphEmailAsync(string accessToken, CancellationToken cancellationToken)
     {

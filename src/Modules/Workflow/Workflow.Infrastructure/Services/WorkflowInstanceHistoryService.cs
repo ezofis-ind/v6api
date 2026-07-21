@@ -51,7 +51,7 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
             : Array.Empty<TransactionHistoryRow>();
 
         var userIds = transactions
-            .SelectMany(t => new[] { t.CreatedBy, t.ModifiedBy })
+            .SelectMany(t => new[] { t.CreatedBy, t.ModifiedBy, t.ActivityUserId })
             .Where(id => id is { } g && g != Guid.Empty)
             .Cast<Guid>();
         var profileByUserId = await _userEmails.GetProfilesAsync(userIds, cancellationToken);
@@ -65,6 +65,10 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
             flows.Add(MapTransactionToFlow(sequence, tx, profileByUserId));
         }
 
+        var nextOpen = transactions.LastOrDefault(t => t.ActionStatus == ActionStatusOpen);
+        Guid? nextActionUserId = nextOpen?.ActivityUserId is { } a && a != Guid.Empty ? a : null;
+        var nextActionUser = ResolveUserEmail(nextActionUserId, profileByUserId);
+
         return new WorkflowInstanceHistoryResult(
             workflowId,
             instanceId,
@@ -73,6 +77,8 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
             instance.Status,
             ((WorkflowInstanceStatus)instance.Status).ToString(),
             flows.Count,
+            nextActionUserId,
+            nextActionUser,
             flows);
     }
 
@@ -85,23 +91,22 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
         var stageDisplay = string.IsNullOrWhiteSpace(stageLabel) ? "Stage" : stageLabel;
         var createdByName = ResolveUserEmail(tx.CreatedBy, profileByUserId);
         var modifiedByName = ResolveUserEmail(tx.ModifiedBy, profileByUserId);
+        Guid? actionUserId = tx.ActivityUserId is { } au && au != Guid.Empty ? au : null;
+        var actionUser = ResolveUserEmail(actionUserId, profileByUserId);
 
         string action;
         string title;
         string? description;
-        DateTime occurredAt;
 
         if (string.Equals(tx.StageType, EndStageType, StringComparison.OrdinalIgnoreCase))
         {
             action = "complete";
             title = "Completed";
             description = string.IsNullOrWhiteSpace(tx.Review) ? "Workflow finished" : tx.Review;
-            occurredAt = tx.ModifiedAt ?? tx.CreatedAt;
         }
         else if (!string.IsNullOrWhiteSpace(tx.Review))
         {
             action = "submit";
-            occurredAt = tx.ModifiedAt ?? tx.CreatedAt;
             if (IsApAgentStage(tx))
             {
                 title = "AP Agent";
@@ -128,12 +133,10 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
             action = "move";
             title = $"Step completed — {stageDisplay}";
             description = null;
-            occurredAt = tx.ModifiedAt ?? tx.CreatedAt;
         }
         else
         {
             action = "move";
-            occurredAt = tx.CreatedAt;
             if (sequence == 1)
             {
                 title = "Started";
@@ -145,6 +148,10 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
                 description = tx.ActivityId;
             }
         }
+
+        // occurredAt = when the stage row was created; performedAt = when modifiedBy acted (review/complete).
+        var occurredAt = tx.CreatedAt;
+        var performedAt = ResolvePerformedAt(tx, action);
 
         var milestone = ResolveMilestone(tx, action, sequence);
         var performerId = ResolvePerformerUserId(tx, action);
@@ -158,18 +165,36 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
             title,
             description,
             occurredAt,
-            occurredAt,
+            performedAt,
             performerId,
             performerName,
             stageDisplay,
             tx.StageType,
             tx.ActivityId,
+            actionUserId,
+            actionUser,
             tx.CreatedBy,
             createdByName,
             tx.ModifiedBy,
             modifiedByName,
             tx.Review,
             tx.ActionStatus);
+    }
+
+    /// <summary>
+    /// When a review/complete was done by <c>modifiedBy</c>, use <c>ModifiedAt</c> for performedAt;
+    /// otherwise fall back to CreatedAt (stage opened / not yet acted).
+    /// </summary>
+    private static DateTime ResolvePerformedAt(TransactionHistoryRow tx, string action)
+    {
+        if (action is "submit" or "complete"
+            || tx.ActionStatus == ActionStatusCompleted
+            || tx.ModifiedBy is { } mod && mod != Guid.Empty)
+        {
+            return tx.ModifiedAt ?? tx.CreatedAt;
+        }
+
+        return tx.CreatedAt;
     }
 
     private static Guid? ResolvePerformerUserId(TransactionHistoryRow tx, string action) =>
@@ -283,7 +308,8 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
                 CreatedAt,
                 ModifiedAt,
                 CreatedBy,
-                ModifiedBy
+                ModifiedBy,
+                ActivityUserId
             FROM {transactionTable}
             WHERE WorkflowInstanceId = @InstanceId
               AND IsDeleted = 0
@@ -306,7 +332,8 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
                 reader.GetDateTime(6),
                 reader.IsDBNull(7) ? null : reader.GetDateTime(7),
                 reader.IsDBNull(8) ? null : reader.GetGuid(8),
-                reader.IsDBNull(9) ? null : reader.GetGuid(9)));
+                reader.IsDBNull(9) ? null : reader.GetGuid(9),
+                reader.IsDBNull(10) ? null : reader.GetGuid(10)));
         }
 
         return list;
@@ -341,5 +368,6 @@ public sealed class WorkflowInstanceHistoryService : IWorkflowInstanceHistorySer
         DateTime CreatedAt,
         DateTime? ModifiedAt,
         Guid? CreatedBy,
-        Guid? ModifiedBy);
+        Guid? ModifiedBy,
+        Guid? ActivityUserId);
 }

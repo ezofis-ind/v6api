@@ -23,9 +23,6 @@ public sealed class AuthLookupController : ControllerBase
 
     /// <summary>
     /// Returns organizations (tenants) for an email. Call this on the login page after user enters email.
-    /// No auth required. If one tenant: show password field. If multiple: show org picker, then password.
-    /// Use the selected tenantId as X-Tenant-Id (GUID) when calling POST /api/auth/ezofis/login.
-    /// Do not treat multiple tenants as an error — the user must pick one organization.
     /// </summary>
     [HttpGet("tenants")]
     [ProducesResponseType(typeof(TenantLookupResponse), StatusCodes.Status200OK)]
@@ -57,12 +54,74 @@ public sealed class AuthLookupController : ControllerBase
             return Ok(new TenantLookupResponse(Array.Empty<TenantLookupItem>(), RequiresOrgSelection: false));
         }
     }
+
+    /// <summary>
+    /// List emails registered in the catalog for a tenant (or all tenants if tenantId omitted).
+    /// Used by playground "Choose an account" social login UI.
+    /// </summary>
+    [HttpGet("emails")]
+    [ProducesResponseType(typeof(TenantEmailListResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListEmails(
+        [FromQuery] Guid? tenantId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var context = await _catalogFactory.CreateDbContextAsync(cancellationToken);
+
+            var query =
+                from ut in context.UserTenants.AsNoTracking()
+                join t in context.Tenants.AsNoTracking() on ut.TenantId equals t.Id
+                where t.IsActive
+                select new { ut.Email, ut.Role, ut.TenantId, TenantName = t.Name };
+
+            if (tenantId.HasValue && tenantId.Value != Guid.Empty)
+                query = query.Where(x => x.TenantId == tenantId.Value);
+
+            var rows = await query
+                .OrderBy(x => x.Email)
+                .ToListAsync(cancellationToken);
+
+            var emails = rows
+                .GroupBy(r => (r.TenantId, Email: r.Email.Trim().ToLowerInvariant()))
+                .Select(g =>
+                {
+                    var first = g.First();
+                    var email = first.Email.Trim();
+                    var local = email.Contains('@') ? email.Split('@')[0] : email;
+                    var displayName = string.Join(' ', local.Split('.', '_', '-', ' ')
+                        .Where(p => p.Length > 0)
+                        .Select(p => char.ToUpperInvariant(p[0]) + (p.Length > 1 ? p[1..] : "")));
+                    return new TenantEmailItem(
+                        email,
+                        displayName,
+                        first.Role,
+                        first.TenantId,
+                        first.TenantName);
+                })
+                .OrderBy(e => e.Email, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return Ok(new TenantEmailListResponse(tenantId, emails));
+        }
+        catch (SqlException ex) when (ex.Number == SqlErrorInvalidObjectName)
+        {
+            return Ok(new TenantEmailListResponse(tenantId, Array.Empty<TenantEmailItem>()));
+        }
+    }
 }
 
-/// <summary>Organizations the email belongs to. When <see cref="RequiresOrgSelection"/> is true, show an org picker before login.</summary>
 public record TenantLookupResponse(
     IReadOnlyList<TenantLookupItem> Tenants,
     bool RequiresOrgSelection = false);
 
-/// <summary>Organization with tenantId for X-Tenant-Id header.</summary>
 public record TenantLookupItem(Guid TenantId, string Name, string Role);
+
+public record TenantEmailListResponse(Guid? TenantId, IReadOnlyList<TenantEmailItem> Emails);
+
+public record TenantEmailItem(
+    string Email,
+    string DisplayName,
+    string Role,
+    Guid TenantId,
+    string TenantName);

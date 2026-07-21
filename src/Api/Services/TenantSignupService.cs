@@ -108,13 +108,11 @@ public sealed class TenantSignupService : ITenantSignupService
             dbName = request.DatabaseName?.Trim() ?? "";
             if (string.IsNullOrEmpty(dbName))
             {
-                var nextNumber = await catalog.Tenants.CountAsync(cancellationToken) + 1;
-                dbName = $"{prefix}_{nextNumber}";
-                // If catalog was reset but tenant DBs still exist, find next available name
-                while (await _dbCreator.DatabaseExistsAsync(dbName, cancellationToken))
+                dbName = BuildDefaultTenantDatabaseName(prefix, tenantId);
+                if (await _dbCreator.DatabaseExistsAsync(dbName, cancellationToken)
+                    && await IsTenantDatabaseOwnedByAnotherTenantAsync(catalog, dbName, tenantId, cancellationToken))
                 {
-                    nextNumber++;
-                    dbName = $"{prefix}_{nextNumber}";
+                    dbName = $"{prefix}_{tenantId:N}".ToLowerInvariant();
                 }
             }
 
@@ -122,22 +120,25 @@ public sealed class TenantSignupService : ITenantSignupService
             if (string.IsNullOrEmpty(dbName))
                 throw new ArgumentException("Invalid database name.", nameof(request));
 
-            await _dbCreator.CreateDatabaseAsync(dbName, cancellationToken);
+            if (!await _dbCreator.DatabaseExistsAsync(dbName, cancellationToken))
+                await _dbCreator.CreateDatabaseAsync(dbName, cancellationToken);
 
             tenantConnectionString = BuildTenantConnectionString(dbName);
 
             await ApplyUsersMigrationsAsync(tenantConnectionString, tenantId, cancellationToken);
-        await ApplyWorkflowSchemaAsync(tenantConnectionString, cancellationToken);
-        await _repositorySchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
-        if (_activityLogOptions.Enabled || _eventLogOptions.Enabled)
-            await _activityLogSchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
-        await _repositoryStorageSeed.EnsureDefaultProvidersAsync(tenantConnectionString, tenantId, null, cancellationToken);
+            await ApplyWorkflowSchemaAsync(tenantConnectionString, cancellationToken);
+            await ApplyConnectorSchemaAsync(tenantConnectionString, cancellationToken);
+            await _repositorySchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
+            if (_activityLogOptions.Enabled || _eventLogOptions.Enabled)
+                await _activityLogSchema.ApplyBaseSchemaAsync(tenantConnectionString, cancellationToken);
+            await _repositoryStorageSeed.EnsureDefaultProvidersAsync(tenantConnectionString, tenantId, null, cancellationToken);
 
-        // Old licenseType intent:
-        // 1 = DMS, 2 = Workflow, 3 = DMS + Workflow.
-        if (licenseType is 2 or 3)
+            // Old licenseType intent:
+            // 1 = DMS, 2 = Workflow, 3 = DMS + Workflow.
+            if (licenseType is 2 or 3)
             {
                 await ApplyWorkflowSchemaAsync(tenantConnectionString, cancellationToken);
+                await ApplyConnectorSchemaAsync(tenantConnectionString, cancellationToken);
             }
 
             if (licenseType is 1 or 3)
@@ -278,6 +279,51 @@ public sealed class TenantSignupService : ITenantSignupService
         catch (TimeZoneNotFoundException)
         {
             return TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+        }
+    }
+
+    private static string BuildDefaultTenantDatabaseName(string prefix, Guid tenantId)
+    {
+        // Same convention as workflow tables: first 8 hex chars of tenant GUID (no dashes).
+        var suffix = tenantId.ToString("N")[..8].ToLowerInvariant();
+        return $"{prefix}_{suffix}";
+    }
+
+    private static async Task<bool> IsTenantDatabaseOwnedByAnotherTenantAsync(
+        CatalogDbContext catalog,
+        string databaseName,
+        Guid tenantId,
+        CancellationToken cancellationToken)
+    {
+        var tenants = await catalog.Tenants
+            .AsNoTracking()
+            .Select(t => new { t.Id, t.ConnectionString })
+            .ToListAsync(cancellationToken);
+
+        foreach (var tenant in tenants)
+        {
+            if (tenant.Id == tenantId)
+                continue;
+            if (ConnectionStringUsesDatabase(tenant.ConnectionString, databaseName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ConnectionStringUsesDatabase(string? connectionString, string databaseName)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return false;
+
+        try
+        {
+            var builder = new SqlConnectionStringBuilder(connectionString);
+            return string.Equals(builder.InitialCatalog, databaseName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return connectionString.Contains(databaseName, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -514,6 +560,73 @@ public sealed class TenantSignupService : ITenantSignupService
             catch (SqlException ex)
             {
                 Console.WriteLine($"Warning: DMS schema batch {batchNumber} failed: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Creates dbo.connector (OAuth) and email-ingest tables on the new tenant DB.
+    /// </summary>
+    private static async Task ApplyConnectorSchemaAsync(string tenantConnectionString, CancellationToken cancellationToken)
+    {
+        await ApplySqlScriptAsync(
+            tenantConnectionString,
+            "Create-Connector-Table.sql",
+            required: true,
+            cancellationToken);
+        await ApplySqlScriptAsync(
+            tenantConnectionString,
+            "Create-EmailIngest-Tables.sql",
+            required: false,
+            cancellationToken);
+    }
+
+    private static async Task ApplySqlScriptAsync(
+        string tenantConnectionString,
+        string scriptFileName,
+        bool required,
+        CancellationToken cancellationToken)
+    {
+        var scriptPath = Path.Combine(AppContext.BaseDirectory, "scripts", scriptFileName);
+        if (!File.Exists(scriptPath))
+            scriptPath = Path.Combine(Directory.GetCurrentDirectory(), "scripts", scriptFileName);
+        if (!File.Exists(scriptPath))
+            scriptPath = Path.Combine(Directory.GetCurrentDirectory(), "src", "Api", "scripts", scriptFileName);
+        if (!File.Exists(scriptPath))
+        {
+            var message = $"Schema script not found: {scriptFileName}";
+            if (required)
+                throw new FileNotFoundException(message);
+            Console.WriteLine($"Warning: {message}. Skipping.");
+            return;
+        }
+
+        var script = await File.ReadAllTextAsync(scriptPath, cancellationToken);
+        script = System.Text.RegularExpressions.Regex.Replace(
+            script, @"USE\s+\[.*?\]\s*GO", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var batches = System.Text.RegularExpressions.Regex.Split(script, @"(?m)^\s*GO\s*$")
+            .Select(b => b.Trim())
+            .Where(b => b.Length > 10)
+            .ToList();
+
+        await using var connection = new SqlConnection(tenantConnectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var batchNumber = 0;
+        foreach (var batch in batches)
+        {
+            batchNumber++;
+            if (string.IsNullOrWhiteSpace(batch))
+                continue;
+
+            try
+            {
+                await using var command = new SqlCommand(batch, connection) { CommandTimeout = 120 };
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (SqlException ex)
+            {
+                Console.WriteLine($"Warning: {scriptFileName} batch {batchNumber} failed: {ex.Message}");
             }
         }
     }

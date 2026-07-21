@@ -436,7 +436,7 @@ INSERT INTO {targetTable}
             insertCmd.Parameters.AddWithValue("@ItemId", (object?)extras.ItemId?.ToString("D") ?? DBNull.Value);
             insertCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
             insertCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
-            insertCmd.Parameters.AddWithValue("@FormData", (object?)extras.FormData ?? DBNull.Value);
+            AddNVarCharMax(insertCmd, "@FormData", extras.FormData);
             await insertCmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -460,7 +460,7 @@ INSERT INTO {targetTable}
             ccCmd.Parameters.AddWithValue("@ItemId", (object?)extras.ItemId?.ToString("D") ?? DBNull.Value);
             ccCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
             ccCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
-            ccCmd.Parameters.AddWithValue("@FormData", (object?)extras.FormData ?? DBNull.Value);
+            AddNVarCharMax(ccCmd, "@FormData", extras.FormData);
             await ccCmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -853,7 +853,7 @@ WHERE (workflowId = @WorkflowIdValue OR workflowId = @WorkflowTableKey)
             await using var cmd = new SqlCommand(sql, connection);
             cmd.Parameters.AddWithValue("@FormId", formId);
             cmd.Parameters.AddWithValue("@FormEntryId", formEntryId);
-            cmd.Parameters.AddWithValue("@FormData", (object?)formDataJson ?? DBNull.Value);
+            AddNVarCharMax(cmd, "@FormData", formDataJson);
             cmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
             cmd.Parameters.AddWithValue("@WorkflowTableKey", workflowIdCompact);
             cmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", instanceStr);
@@ -869,6 +869,15 @@ WHERE (workflowId = @WorkflowIdValue OR workflowId = @WorkflowTableKey)
                     workflowInstanceId);
             }
         }
+    }
+
+    /// <summary>
+    /// Bind large form JSON as NVARCHAR(MAX). AddWithValue can size as NVARCHAR(4000) and truncate.
+    /// </summary>
+    private static void AddNVarCharMax(SqlCommand cmd, string parameterName, string? value)
+    {
+        var p = cmd.Parameters.Add(parameterName, System.Data.SqlDbType.NVarChar, -1);
+        p.Value = string.IsNullOrEmpty(value) ? DBNull.Value : value;
     }
 
 }

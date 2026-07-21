@@ -420,6 +420,15 @@ BEGIN
         ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD formEntryId nvarchar(255) NULL;
     IF COL_LENGTH('{tableFullName}', 'formData') IS NULL
         ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD formData nvarchar(max) NULL;
+    ELSE IF EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = N'workflow'
+          AND TABLE_NAME = N'{prefix}_{workflowKey}'
+          AND COLUMN_NAME = N'formData'
+          AND CHARACTER_MAXIMUM_LENGTH <> -1
+    )
+        ALTER TABLE workflow.[{prefix}_{workflowKey}] ALTER COLUMN formData nvarchar(max) NULL;
     IF COL_LENGTH('{tableFullName}', 'action') IS NULL
         ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD [action] int NOT NULL
             CONSTRAINT [DF_{prefix}_{workflowKey}_action] DEFAULT (1);

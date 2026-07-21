@@ -51,6 +51,7 @@ builder.Services.AddHttpsRedirection(options =>
 // Multi-tenancy (database-per-tenant: catalog + tenant connection resolution)
 builder.Services.AddMultiTenancy();
 builder.Services.AddCatalog(builder.Configuration);
+builder.Services.AddScoped<IPlaygroundApiKeyService, PlaygroundApiKeyService>();
 builder.Services.AddScoped<ITenantSignupService, TenantSignupService>();
 builder.Services.Configure<TenantPilotUserOptions>(
     builder.Configuration.GetSection(TenantPilotUserOptions.SectionName));
@@ -224,7 +225,8 @@ else
     Log.Warning("Hangfire is disabled because ConnectionStrings:DefaultConnection is missing.");
 }
 
-// API controllers
+// API controllers — keep default numeric enum serialization (workflow status = 1, not "active").
+// String enums (e.g. AP dashboard period) use [JsonConverter] on those types only.
 builder.Services.AddControllers();
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly()));
 

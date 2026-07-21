@@ -70,8 +70,16 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
 
         var connectorId = ResolveConnectorId(options, json);
         if (connectorId == null || connectorId == Guid.Empty)
-            throw new InvalidOperationException(
-                "emailConnectorId is required for email-initiated workflows. Connect Gmail/Outlook via OAuth and pass the connector Guid.");
+        {
+            // Connector is optional at create/update — workflow can be saved; link mailbox later when OAuth Guid is set.
+            _logger.LogInformation(
+                "Skipping email ingest mailbox link for workflow {WorkflowId}: emailConnectorId not provided.",
+                workflowId);
+            return new WorkflowEmailIngestLinkResult(
+                existing?.Id,
+                existing?.ConnectorId,
+                existing?.IsEnabled ?? false);
+        }
 
         var connector = await _connectorService.GetByIdAsync(connectorId.Value, cancellationToken)
             ?? throw new InvalidOperationException("emailConnectorId connector not found.");
