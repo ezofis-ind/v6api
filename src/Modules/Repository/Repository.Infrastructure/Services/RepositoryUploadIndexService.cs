@@ -19,19 +19,22 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
     private readonly IRepositoryStorageSeedService _storageSeed;
     private readonly IRepositoryFileStorage _fileStorage;
     private readonly IOcrExtractionService _ocrExtraction;
+    private readonly ITenantDisplayResolver _tenantDisplay;
 
     public RepositoryUploadIndexService(
         ITenantConnectionProvider connectionProvider,
         IStaticRepositoryProvisioner provisioner,
         IRepositoryStorageSeedService storageSeed,
         IRepositoryFileStorage fileStorage,
-        IOcrExtractionService ocrExtraction)
+        IOcrExtractionService ocrExtraction,
+        ITenantDisplayResolver tenantDisplay)
     {
         _connectionProvider = connectionProvider;
         _provisioner = provisioner;
         _storageSeed = storageSeed;
         _fileStorage = fileStorage;
         _ocrExtraction = ocrExtraction;
+        _tenantDisplay = tenantDisplay;
     }
 
     public async Task<UploadIndexUploadResult> UploadAsync(
@@ -189,8 +192,9 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
             userId,
             cancellationToken);
 
+        var tenantDisplay = await _tenantDisplay.ResolveAsync(tenantId, cancellationToken);
         var jobId = BackgroundJob.Enqueue<ArchiveStageItemJob>(j =>
-            j.Execute(new ArchiveStageJobArgs(tenantId, request.RepositoryId, stageId, userId), null));
+            j.Execute(tenantDisplay, new ArchiveStageJobArgs(tenantId, request.RepositoryId, stageId, userId), null));
 
         return new UploadIndexArchiveQueuedResult(
             stageId.ToString("D"),

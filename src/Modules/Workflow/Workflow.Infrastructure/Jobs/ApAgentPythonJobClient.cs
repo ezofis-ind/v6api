@@ -1,4 +1,5 @@
 using Hangfire;
+using SaaSApp.MultiTenancy;
 using SaaSApp.Workflow.Application.Contracts;
 
 namespace SaaSApp.Workflow.Infrastructure.Jobs;
@@ -6,15 +7,20 @@ namespace SaaSApp.Workflow.Infrastructure.Jobs;
 public sealed class ApAgentPythonJobClient : IApAgentPythonJobClient
 {
     private readonly IApAgentJobProgressService _progress;
+    private readonly ITenantDisplayResolver _tenantDisplay;
 
-    public ApAgentPythonJobClient(IApAgentJobProgressService progress)
+    public ApAgentPythonJobClient(
+        IApAgentJobProgressService progress,
+        ITenantDisplayResolver tenantDisplay)
     {
         _progress = progress;
+        _tenantDisplay = tenantDisplay;
     }
 
     public async Task<string> EnqueueAsync(ApAgentPythonJobArgs args, CancellationToken cancellationToken = default)
     {
-        var jobId = BackgroundJob.Enqueue<RunApAgentPythonJob>(j => j.Execute(args, null));
+        var tenantDisplay = await _tenantDisplay.ResolveAsync(args.TenantId, cancellationToken);
+        var jobId = BackgroundJob.Enqueue<RunApAgentPythonJob>(j => j.Execute(tenantDisplay, args, null));
         await _progress.RegisterQueuedAsync(
             jobId,
             args.TenantId,

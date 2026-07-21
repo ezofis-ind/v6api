@@ -41,6 +41,7 @@ public static class CatalogServiceCollectionExtensions
         });
 
         services.AddScoped<ITenantConnectionStringResolver, TenantConnectionStringResolver>();
+        services.AddScoped<ITenantDisplayResolver, TenantDisplayResolver>();
         services.AddScoped<ITenantDatabaseCreator, TenantDatabaseCreator>();
         services.AddScoped<IUserTenantRegistry, UserTenantRegistry>();
         services.AddScoped<IConnectorProviderCatalog, ConnectorProviderCatalog>();

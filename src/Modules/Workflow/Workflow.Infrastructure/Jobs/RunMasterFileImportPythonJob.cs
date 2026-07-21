@@ -25,14 +25,20 @@ public sealed class RunMasterFileImportPythonJob
     }
 
     [AutomaticRetry(Attempts = 0)]
-    public async Task Execute(MasterFileImportPythonJobArgs args, PerformContext? context)
+    [JobDisplayName("Master file import · {0}")]
+    public async Task Execute(string tenantDisplay, MasterFileImportPythonJobArgs args, PerformContext? context)
     {
         var jobId = context?.BackgroundJob.Id
             ?? throw new InvalidOperationException("Hangfire PerformContext is required for master file import jobs.");
 
+        context?.SetJobParameter("TenantId", args.TenantId.ToString("D"));
+        context?.SetJobParameter("TenantName", tenantDisplay);
+
         _logger.LogInformation(
-            "Master file import job {JobId} started for process {ProcessId}, notification {NotificationId}",
+            "Master file import job {JobId} started for tenant {TenantDisplay} ({TenantId}), process {ProcessId}, notification {NotificationId}",
             jobId,
+            tenantDisplay,
+            args.TenantId,
             args.MasterFileProcessId,
             args.NotificationId);
 
