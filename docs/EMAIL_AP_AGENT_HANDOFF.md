@@ -108,10 +108,12 @@ Do **not** store Google/Microsoft/Intuit tokens in Python — call V6 with tenan
 ## Poller behavior
 
 1. List unread INBOX (optional `queryFilter`).
-2. For matching invoice attachments → `StartWorkflow` with file + `TriggerApAgentPythonJob`.
-3. Context JSON includes `messageId`, `from`, `subject`, `masterSource`, etc.
-4. Dedup in `EmailIngestProcessed`; mark message read only if at least one attachment started.
-5. Emails with no matching attachment stay unread.
+2. As soon as a message is claimed: **mark as read** + insert `EmailIngestProcessed` message sentinel (`__message_handled__`) so Hangfire never starts it again even if StartWorkflow fails.
+3. Prefer real invoice attachments (PDF/TIFF); skip signature/inline badge images. Attachment dedup uses stable `filename+size` (Outlook attachment ids are unstable).
+4. For each new attachment → claim attachment row → `StartWorkflow` + `TriggerApAgentPythonJob`.
+5. Context JSON includes `messageId`, `from`, `subject`, `masterSource`, etc.
+6. If mark-as-read fails (often missing `gmail.modify` / `Mail.ReadWrite`), error is written to `EmailIngestMailbox.LastError` and logged — **dedup still blocks re-start**. Re-authorize the mail connector.
+7. Already-handled unread messages: skip start, retry mark-as-read only.
 
 ## QuickBooks × AP Agent (integration path)
 
