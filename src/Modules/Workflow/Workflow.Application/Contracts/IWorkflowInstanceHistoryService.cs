@@ -19,6 +19,11 @@ public sealed record WorkflowInstanceHistoryResult(
     int Status,
     string StatusName,
     int FlowCount,
+    /// <summary>Assignee user id on the open (pending) transaction.</summary>
+    Guid? NextActionUserId,
+    /// <summary>Next action user email (open stage assignee).</summary>
+    [property: System.Text.Json.Serialization.JsonPropertyName("nextActionUser")]
+    string? NextActionUser,
     IReadOnlyList<WorkflowInstanceHistoryFlowDto> Flows);
 
 /// <summary>
@@ -32,7 +37,9 @@ public sealed record WorkflowInstanceHistoryFlowDto(
     string Action,
     string Title,
     string? Description,
+    /// <summary>Stage opened — transaction <c>CreatedAt</c>.</summary>
     DateTime OccurredAtUtc,
+    /// <summary>Action performed — transaction <c>ModifiedAt</c> when <c>modifiedBy</c> acted; else CreatedAt.</summary>
     DateTime PerformedAtUtc,
     Guid? PerformedByUserId,
     /// <summary>Performer email from users.Users (matched by <see cref="PerformedByUserId"/>).</summary>
@@ -40,6 +47,11 @@ public sealed record WorkflowInstanceHistoryFlowDto(
     string? StageName,
     string? StageType,
     string? ActivityId,
+    /// <summary>Transaction <c>ActivityUserId</c>.</summary>
+    Guid? ActionUserId,
+    /// <summary>Assigned action user email for this stage.</summary>
+    [property: System.Text.Json.Serialization.JsonPropertyName("actionUser")]
+    string? ActionUser,
     Guid? CreatedBy,
     /// <summary>Creator email from users.Users.</summary>
     string? CreatedByName,

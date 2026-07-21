@@ -23,6 +23,7 @@ public sealed class GetInstanceCommentsQueryHandler : IRequestHandler<GetInstanc
         var comments = await _dynamicTableRepository.GetCommentsAsync(request.WorkflowId, request.InstanceId, cancellationToken);
 
         var commentItems = comments
+            .Where(c => !WorkflowCommentHelper.IsAutomaticRuleProceedComment(c.Comments))
             .Select(c => new CommentItem(
             c.Id,
             request.WorkflowId,

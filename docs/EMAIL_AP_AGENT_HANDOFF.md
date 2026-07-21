@@ -71,7 +71,7 @@ POST /api/email-ingest/mailboxes
   "queryFilter": "has:attachment subject:invoice",
   "masterSource": "InternalForm",
   "masterFormId": "<vendor-form-id>",
-  "attachmentExtensions": ".pdf,.png,.jpg,.jpeg,.tif,.tiff"
+  "attachmentExtensions": ".pdf,.tif,.tiff"
 }
 ```
 

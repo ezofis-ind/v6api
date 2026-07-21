@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using SaaSApp.Workflow.Application;
 using SaaSApp.Workflow.Application.Contracts;
@@ -89,19 +91,42 @@ public sealed class WorkflowEzfbFormDataLoader : SaaSApp.Workflow.Application.Co
         if (selectColumns.Count == 0)
             return null;
 
+        // Build JSON in C# — do NOT use FOR JSON + ExecuteScalar (truncates at ~2033 chars,
+        // which drops PO Amount / PO Date / PO Line Item from inbox formData).
         var selectList = string.Join(", ", selectColumns.Select(c =>
-            $"ISNULL(CONVERT(NVARCHAR(MAX), [{EscapeColumn(c)}]), N'') AS [{EscapeColumn(c)}]"));
+            $"[{EscapeColumn(c)}]"));
 
         var dataSql = $@"
 SELECT {selectList}
 FROM dbo.[{tableName}]
-WHERE itemId = @ItemId AND (isDeleted = 0 OR isDeleted IS NULL)
-FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;";
+WHERE itemId = @ItemId AND (isDeleted = 0 OR isDeleted IS NULL);";
 
         await using var dataCmd = new SqlCommand(dataSql, connection);
         dataCmd.Parameters.AddWithValue("@ItemId", formEntryId);
-        var data = await dataCmd.ExecuteScalarAsync(cancellationToken);
-        return data == null || data == DBNull.Value ? null : Convert.ToString(data);
+        await using var reader = await dataCmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+
+        using var stream = new MemoryStream();
+        await using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                var name = reader.GetName(i);
+                if (string.IsNullOrWhiteSpace(name) || IsSystemColumn(name))
+                    continue;
+
+                var value = reader.IsDBNull(i)
+                    ? string.Empty
+                    : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? string.Empty;
+                writer.WriteString(name, value);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private static bool IsSystemColumn(string column) =>

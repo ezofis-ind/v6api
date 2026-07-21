@@ -531,7 +531,7 @@ Creates a new tenant: provisions a dedicated database, runs migrations, and regi
 - **loginType**: Optional. Login source/type, e.g. `EZOFIS`, `GOOGLE`, `MICROSOFT`. Defaults to `EZOFIS`.
 - **licenseType**: Optional. `1` = DMS, `2` = Workflow, `3` = DMS+Workflow. Defaults to `3`.
 - **firstName**, **lastName**: Optional. Admin profile.
-- **databaseName**: Optional. Auto-derived (e.g. ezofis_Tenant_1) if omitted.
+- **databaseName**: Optional. Auto-derived (e.g. ezofis_Tenant_0b3e1b77 from first 8 chars of tenantId) if omitted.
 - **signupSource**: Where the signup came from: e.g. `MobileApp`, `Web`, `System`, `Api`.
 - **platform**: Client platform: e.g. `iOS`, `Android`, `Web`, `Windows`.
 - **appVersion**: Application version (for tracking).

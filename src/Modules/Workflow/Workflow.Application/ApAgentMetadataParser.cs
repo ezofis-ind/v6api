@@ -75,6 +75,9 @@ public static class ApAgentMetadataParser
             ["PayToAddress"] = "PayToAddress",
             ["Document Type"] = "DocumentType",
             ["DocumentType"] = "DocumentType",
+            ["Invoice Extracted Line Item"] = "InvoiceExtractedLineItem",
+            ["InvoiceExtractedLineItem"] = "InvoiceExtractedLineItem",
+            ["invoice extracted line item"] = "InvoiceExtractedLineItem",
         };
 
     public static (IReadOnlyDictionary<string, string> Fields, string? LineItemsJson) ParseFieldsPayload(JsonElement fieldsRoot)

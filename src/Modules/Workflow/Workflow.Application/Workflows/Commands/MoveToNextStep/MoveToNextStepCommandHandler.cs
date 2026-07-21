@@ -97,9 +97,17 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
         if (targetDefinitionStep == null)
             throw new InvalidOperationException($"No workflow step found for activityId '{request.ActivityId.Trim()}'.");
 
-        var isApAgentStep = WorkflowStepTransitionHelper.IsApAgentStep(targetDefinitionStep);
+        var isApAgentMoveNext = ApAgentStepDetector.IsApAgentMoveNext(targetDefinitionStep, request.ActivityId);
+        var isApAgentStep = WorkflowStepTransitionHelper.IsApAgentStep(targetDefinitionStep) || isApAgentMoveNext;
         var routesByAction = WorkflowStepActionsHelper.HasMatchingAction(targetDefinitionStep, request.Review)
             || WorkflowStepTransitionHelper.IsApproveReview(request.Review);
+
+        var formId = !string.IsNullOrWhiteSpace(request.FormId)
+            ? request.FormId
+            : request.ApAgent?.FormId;
+        var formEntryId = request.FormEntryId is > 0
+            ? request.FormEntryId
+            : request.ApAgent?.FormEntryId;
 
         if (isApAgentStep && !string.IsNullOrWhiteSpace(request.Review) && !routesByAction)
         {
@@ -112,6 +120,18 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
                     userId,
                     request.ApAgent,
                     legacyTransactionId: null,
+                    cancellationToken);
+            }
+
+            // Still push po_row → form even when review does not advance the workflow.
+            if (!string.IsNullOrWhiteSpace(formId) && formEntryId is > 0)
+            {
+                await _apAgentMoveNext.ApplyPoRowFromStoredAgentValidationAsync(
+                    instance.WorkflowId,
+                    instance.Id,
+                    formId!,
+                    formEntryId.Value,
+                    request.ApAgent?.AiAgentResponseJson,
                     cancellationToken);
             }
 
@@ -156,7 +176,30 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
                     $"AP agent step is not active (status: {apStepInstance.Status}).");
         }
 
-        var mailboxForm = await BuildMailboxFormSnapshotAsync(request, cancellationToken);
+        // Apply po_row from request AIAGENTResponse (preferred) or stored validation → ezfb BEFORE inbox snapshot.
+        var appliedPoRowToEzfb = false;
+        if (isApAgentMoveNext
+            && !string.IsNullOrWhiteSpace(formId)
+            && formEntryId is > 0)
+        {
+            await _apAgentMoveNext.ApplyPoRowFromStoredAgentValidationAsync(
+                instance.WorkflowId,
+                instance.Id,
+                formId!,
+                formEntryId.Value,
+                request.ApAgent?.AiAgentResponseJson,
+                cancellationToken);
+            // Always prefer ezfb for inbox after AP-agent move-next (full row incl. PO Amount/Date/Line Item).
+            appliedPoRowToEzfb = true;
+        }
+
+        // After po_row → ezfb, prefer ezfb for inbox (client formData usually omits PO Amount/Date/Line Item).
+        var mailboxForm = await BuildMailboxFormSnapshotAsync(
+            request,
+            formId,
+            formEntryId,
+            cancellationToken,
+            preferEzfb: appliedPoRowToEzfb);
 
         var legacySync = await _legacyTransactionSync.SyncTransactionByActivityIdAsync(
             instance.WorkflowId,
@@ -236,7 +279,9 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
             _ => "OK"
         };
 
-        if (!string.IsNullOrWhiteSpace(request.Comments))
+        // Skip v5 proceed echoes like "2MH_xxx: Matched" — those belong on review, not comments.
+        if (!string.IsNullOrWhiteSpace(request.Comments)
+            && !WorkflowCommentHelper.IsAutomaticRuleProceedComment(request.Comments))
         {
             var stepInstanceId = WorkflowStepTransitionHelper.FindStepInstance(instance, targetDefinitionStep.Id)?.Id;
             await _dynamicTableRepository.AddCommentAsync(
@@ -255,19 +300,14 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
         int? legacyNextTransactionId = isCompleted ? 0 : legacySync.NextTransactionId;
         Guid? legacyNextTransactionGuid = isCompleted ? null : legacySync.NextTransactionGuid;
 
-        if (ApAgentStepDetector.IsApAgentMoveNext(targetDefinitionStep, request.ActivityId)
-            && !string.IsNullOrWhiteSpace(request.FormId)
-            && request.FormEntryId is > 0)
-        {
-            await _apAgentMoveNext.ApplyPoRowFromStoredAgentValidationAsync(
-                instance.WorkflowId,
-                instance.Id,
-                request.FormId,
-                request.FormEntryId.Value,
-                cancellationToken);
-        }
-
-        await PropagateMailboxFormDataAsync(request, instance, cancellationToken);
+        // Refresh mailbox formData after any later form writes (user formData / comments path).
+        await PropagateMailboxFormDataAsync(
+            request,
+            instance,
+            formId,
+            formEntryId,
+            preferEzfb: appliedPoRowToEzfb,
+            cancellationToken);
 
         return new MoveToNextStepCommandResult(
             true,
@@ -299,39 +339,63 @@ public sealed class MoveToNextStepCommandHandler : IRequestHandler<MoveToNextSte
 
     private async Task<MailboxFormSnapshot?> BuildMailboxFormSnapshotAsync(
         MoveToNextStepCommand request,
-        CancellationToken cancellationToken)
+        string? formId,
+        int? formEntryId,
+        CancellationToken cancellationToken,
+        bool preferEzfb = false)
     {
-        if (string.IsNullOrWhiteSpace(request.FormId) || request.FormEntryId is not > 0)
+        var resolvedFormId = !string.IsNullOrWhiteSpace(formId) ? formId : request.FormId;
+        var resolvedEntryId = formEntryId is > 0 ? formEntryId : request.FormEntryId;
+        if (string.IsNullOrWhiteSpace(resolvedFormId) || resolvedEntryId is not > 0)
             return null;
 
-        string? formDataJson;
-        if (HasUserFormData(request))
+        string? formDataJson = null;
+
+        // After AP-agent po_row sync, ezfb is the source of truth (includes PO Amount / PO Date / PO Line Item).
+        if (preferEzfb)
+        {
+            formDataJson = await _ezfbFormDataLoader.LoadFormDataJsonAsync(
+                resolvedFormId,
+                resolvedEntryId.Value,
+                cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(formDataJson) && HasUserFormData(request))
         {
             formDataJson = MoveToNextStepFormDataComposer.ForMailbox(request.SubmittedFormDataJson)
                 ?? MoveToNextStepFormDataComposer.FromParsedFields(
                     request.FormDataFields,
                     request.FormLineItemsJson);
         }
-        else
+
+        if (string.IsNullOrWhiteSpace(formDataJson) && !preferEzfb)
         {
             formDataJson = await _ezfbFormDataLoader.LoadFormDataJsonAsync(
-                request.FormId,
-                request.FormEntryId.Value,
+                resolvedFormId,
+                resolvedEntryId.Value,
                 cancellationToken);
         }
 
         if (string.IsNullOrWhiteSpace(formDataJson))
             return null;
 
-        return new MailboxFormSnapshot(request.FormId, request.FormEntryId, formDataJson);
+        return new MailboxFormSnapshot(resolvedFormId, resolvedEntryId, formDataJson);
     }
 
     private async Task PropagateMailboxFormDataAsync(
         MoveToNextStepCommand request,
         WorkflowInstance instance,
+        string? formId,
+        int? formEntryId,
+        bool preferEzfb,
         CancellationToken cancellationToken)
     {
-        var snapshot = await BuildMailboxFormSnapshotAsync(request, cancellationToken);
+        var snapshot = await BuildMailboxFormSnapshotAsync(
+            request,
+            formId,
+            formEntryId,
+            cancellationToken,
+            preferEzfb);
         if (snapshot == null)
             return;
 

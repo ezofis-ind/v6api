@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MediatR;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
@@ -11,7 +14,20 @@ namespace SaaSApp.Workflow.Infrastructure.Services;
 
 public sealed class EmailIngestService : IEmailIngestService
 {
-    private const string DefaultExtensions = ".pdf,.png,.jpg,.jpeg,.tif,.tiff";
+    private const string DefaultExtensions = ".pdf,.tif,.tiff";
+    /// <summary>Sentinel AttachmentId meaning the whole message was handled (do not poll again).</summary>
+    private const string MessageHandledSentinel = "__message_handled__";
+
+    /// <summary>Image types often used in email signatures — only used if no document attachment exists.</summary>
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"
+    };
+
+    private static readonly HashSet<string> DocumentExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".tif", ".tiff", ".doc", ".docx", ".xls", ".xlsx"
+    };
     private static readonly Guid SystemUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
     private readonly ITenantContext _tenantContext;
@@ -59,7 +75,7 @@ public sealed class EmailIngestService : IEmailIngestService
                     MasterSource NVARCHAR(32) NOT NULL CONSTRAINT DF_EmailIngestMailbox_MasterSource DEFAULT (N'InternalForm'),
                     MasterFormId NVARCHAR(128) NULL,
                     MasterConnectorId UNIQUEIDENTIFIER NULL,
-                    AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.png,.jpg,.jpeg,.tif,.tiff'),
+                    AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.tif,.tiff'),
                     LastPolledAtUtc DATETIME2(3) NULL,
                     LastError NVARCHAR(2000) NULL,
                     CreatedAtUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Created DEFAULT (SYSUTCDATETIME()),
@@ -75,12 +91,23 @@ public sealed class EmailIngestService : IEmailIngestService
                 CREATE TABLE dbo.EmailIngestProcessed (
                     Id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EmailIngestProcessed PRIMARY KEY,
                     MailboxId UNIQUEIDENTIFIER NOT NULL,
-                    ProviderMessageId NVARCHAR(256) NOT NULL,
+                    ProviderMessageId NVARCHAR(450) NOT NULL,
                     AttachmentId NVARCHAR(256) NOT NULL,
                     WorkflowInstanceId UNIQUEIDENTIFIER NULL,
                     ProcessedAtUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EmailIngestProcessed_At DEFAULT (SYSUTCDATETIME()),
                     CONSTRAINT UQ_EmailIngestProcessed UNIQUE (MailboxId, ProviderMessageId, AttachmentId)
                 );
+            END
+            ELSE
+            BEGIN
+                -- Outlook Graph ids often exceed 256 chars; truncation broke dedup and re-started workflows.
+                IF EXISTS (
+                    SELECT 1 FROM sys.columns
+                    WHERE object_id = OBJECT_ID(N'dbo.EmailIngestProcessed')
+                      AND name = N'ProviderMessageId' AND max_length < 900)
+                BEGIN
+                    ALTER TABLE dbo.EmailIngestProcessed ALTER COLUMN ProviderMessageId NVARCHAR(450) NOT NULL;
+                END
             END
             """;
         await using var cmd = new SqlCommand(sql, connection);
@@ -279,76 +306,114 @@ public sealed class EmailIngestService : IEmailIngestService
             foreach (var message in messages.Items)
             {
                 scanned++;
-                var matching = message.Attachments
-                    .Where(a => MatchesExtension(a.FileName, extensions))
-                    .ToList();
+                var messageKey = NormalizeProviderMessageId(message.Id);
+
+                // Already handled (or any prior attachment row) — never start again; keep trying mark-as-read.
+                if (await IsMessageHandledAsync(mailboxId, messageKey, cancellationToken))
+                {
+                    skipped++;
+                    await EnsureMessageHandledAsync(mailboxId, message.Id, messageKey, mailbox.ConnectorId, cancellationToken);
+                    continue;
+                }
+
+                // Prefer real invoice docs (PDF/TIFF). Skip email-signature / inline badge images.
+                var matching = SelectIngestAttachments(message.Attachments, extensions);
 
                 if (matching.Count == 0)
+                {
+                    await EnsureMessageHandledAsync(mailboxId, message.Id, messageKey, mailbox.ConnectorId, cancellationToken);
+                    skipped++;
                     continue;
+                }
 
-                var anyStarted = false;
+                var newlyStarted = 0;
+                var alreadyDone = 0;
+
+                // As soon as we take the email: mark READ + claim in DB.
+                // Do NOT wait for StartWorkflow / AP Agent to finish.
+                await EnsureMessageHandledAsync(
+                    mailboxId, message.Id, messageKey, mailbox.ConnectorId, cancellationToken);
+
                 foreach (var att in matching)
                 {
-                    if (await IsProcessedAsync(mailboxId, message.Id, att.Id, cancellationToken))
+                    // Stable dedup key: Outlook attachment ids are long/unstable; filename+size is stable.
+                    var attKey = BuildAttachmentDedupKey(att);
+                    if (await IsProcessedAsync(mailboxId, messageKey, attKey, cancellationToken)
+                        || await IsProcessedAsync(mailboxId, messageKey, att.Id, cancellationToken))
                     {
                         skipped++;
+                        alreadyDone++;
                         continue;
                     }
 
-                    var (stream, contentType, fileName) = await _oauthService.DownloadGmailAttachmentAsync(
-                        mailbox.ConnectorId, message.Id, att.Id, cancellationToken);
-                    await using (stream)
-                    {
-                        await using var ms = new MemoryStream();
-                        await stream.CopyToAsync(ms, cancellationToken);
-                        var bytes = ms.ToArray();
-                        if (bytes.Length == 0)
-                            continue;
-
-                        var contextJson = JsonSerializer.Serialize(new Dictionary<string, object?>
-                        {
-                            ["emailIngest"] = true,
-                            ["mailboxId"] = mailbox.Id,
-                            ["connectorId"] = mailbox.ConnectorId,
-                            ["messageId"] = message.Id,
-                            ["from"] = message.From,
-                            ["subject"] = message.Subject,
-                            ["receivedAtUtc"] = message.ReceivedAtUtc,
-                            ["attachmentId"] = att.Id,
-                            ["attachmentFileName"] = fileName ?? att.FileName,
-                            ["masterSource"] = mailbox.MasterSource,
-                            ["masterFormId"] = mailbox.MasterFormId,
-                            ["masterConnectorId"] = mailbox.MasterConnectorId
-                        });
-
-                        var startResult = await _mediator.Send(new StartWorkflowCommand(
-                            mailbox.WorkflowId,
-                            Context: contextJson,
-                            Attachment: new StartWorkflowAttachmentPayload(
-                                bytes,
-                                fileName ?? att.FileName ?? "invoice.bin",
-                                contentType ?? att.MimeType),
-                            TriggerApAgentPythonJob: true), cancellationToken);
-
-                        await MarkProcessedAsync(mailboxId, message.Id, att.Id, startResult.InstanceId, cancellationToken);
-                        started++;
-                        anyStarted = true;
-                    }
-                }
-
-                if (anyStarted)
-                {
                     try
                     {
-                        await _oauthService.MarkMailMessageReadAsync(mailbox.ConnectorId, message.Id, cancellationToken);
+                        var (stream, contentType, fileName) = await _oauthService.DownloadGmailAttachmentAsync(
+                            mailbox.ConnectorId, message.Id, att.Id, cancellationToken);
+                        await using (stream)
+                        {
+                            await using var ms = new MemoryStream();
+                            await stream.CopyToAsync(ms, cancellationToken);
+                            var bytes = ms.ToArray();
+                            if (bytes.Length == 0)
+                            {
+                                await MarkProcessedAsync(mailboxId, messageKey, attKey, null, cancellationToken);
+                                alreadyDone++;
+                                continue;
+                            }
+
+                            // Claim attachment row before StartWorkflow so a start failure cannot re-loop.
+                            await MarkProcessedAsync(mailboxId, messageKey, attKey, null, cancellationToken);
+
+                            var contextJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+                            {
+                                ["emailIngest"] = true,
+                                ["mailboxId"] = mailbox.Id,
+                                ["connectorId"] = mailbox.ConnectorId,
+                                ["messageId"] = message.Id,
+                                ["from"] = message.From,
+                                ["subject"] = message.Subject,
+                                ["receivedAtUtc"] = message.ReceivedAtUtc,
+                                ["attachmentId"] = att.Id,
+                                ["attachmentFileName"] = fileName ?? att.FileName,
+                                ["masterSource"] = mailbox.MasterSource,
+                                ["masterFormId"] = mailbox.MasterFormId,
+                                ["masterConnectorId"] = mailbox.MasterConnectorId
+                            });
+
+                            var startResult = await _mediator.Send(new StartWorkflowCommand(
+                                mailbox.WorkflowId,
+                                Context: contextJson,
+                                Attachment: new StartWorkflowAttachmentPayload(
+                                    bytes,
+                                    fileName ?? att.FileName ?? "invoice.bin",
+                                    contentType ?? att.MimeType),
+                                TriggerApAgentPythonJob: true), cancellationToken);
+
+                            await TrySetProcessedInstanceIdAsync(
+                                mailboxId, messageKey, attKey, startResult.InstanceId, cancellationToken);
+                            started++;
+                            newlyStarted++;
+                        }
                     }
-                    catch (Exception markEx)
+                    catch (Exception attEx)
                     {
-                        _logger.LogWarning(markEx,
-                            "Email ingest started workflows but mark-as-read failed for message {MessageId}",
-                            message.Id);
+                        _logger.LogWarning(
+                            attEx,
+                            "Email ingest failed for mailbox {MailboxId} message {MessageId} attachment {AttachmentId}",
+                            mailboxId,
+                            message.Id,
+                            att.Id);
                     }
                 }
+
+                _logger.LogInformation(
+                    "Email ingest mailbox {MailboxId} message {MessageId}: started={Started}, alreadyDone={AlreadyDone}, matching={Matching}",
+                    mailboxId,
+                    message.Id,
+                    newlyStarted,
+                    alreadyDone,
+                    matching.Count);
             }
 
             await UpdatePollStatusAsync(mailboxId, null, cancellationToken);
@@ -430,11 +495,44 @@ public sealed class EmailIngestService : IEmailIngestService
             SELECT TOP 1 1 FROM dbo.EmailIngestProcessed
             WHERE MailboxId = @MailboxId AND ProviderMessageId = @MessageId AND AttachmentId = @AttachmentId;
             """, connection);
-        cmd.Parameters.AddWithValue("@MailboxId", mailboxId);
-        cmd.Parameters.AddWithValue("@MessageId", messageId);
-        cmd.Parameters.AddWithValue("@AttachmentId", attachmentId);
+        cmd.Parameters.Add("@MailboxId", System.Data.SqlDbType.UniqueIdentifier).Value = mailboxId;
+        cmd.Parameters.Add("@MessageId", System.Data.SqlDbType.NVarChar, 450).Value = messageId;
+        cmd.Parameters.Add("@AttachmentId", System.Data.SqlDbType.NVarChar, 256).Value = Truncate(attachmentId, 256);
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
         return result != null && result != DBNull.Value;
+    }
+
+    private async Task<bool> IsMessageHandledAsync(
+        Guid mailboxId, string messageKey, CancellationToken cancellationToken)
+    {
+        if (await IsProcessedAsync(mailboxId, messageKey, MessageHandledSentinel, cancellationToken))
+            return true;
+
+        var cs = RequireConnectionString();
+        await using var connection = new SqlConnection(cs);
+        await connection.OpenAsync(cancellationToken);
+        await using var cmd = new SqlCommand(
+            """
+            SELECT TOP 1 1 FROM dbo.EmailIngestProcessed
+            WHERE MailboxId = @MailboxId AND ProviderMessageId = @MessageId;
+            """, connection);
+        cmd.Parameters.Add("@MailboxId", System.Data.SqlDbType.UniqueIdentifier).Value = mailboxId;
+        cmd.Parameters.Add("@MessageId", System.Data.SqlDbType.NVarChar, 450).Value = messageKey;
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result != null && result != DBNull.Value;
+    }
+
+    private async Task EnsureMessageHandledAsync(
+        Guid mailboxId,
+        string providerMessageId,
+        string messageKey,
+        Guid connectorId,
+        CancellationToken cancellationToken)
+    {
+        // Mark READ in Gmail/Outlook first — do not wait for workflow start/complete.
+        await TryMarkMessageReadAsync(connectorId, providerMessageId, cancellationToken);
+        // Then claim in DB so Hangfire never picks this message again even if start fails.
+        await MarkProcessedAsync(mailboxId, messageKey, MessageHandledSentinel, null, cancellationToken);
     }
 
     private async Task MarkProcessedAsync(
@@ -448,20 +546,119 @@ public sealed class EmailIngestService : IEmailIngestService
             INSERT INTO dbo.EmailIngestProcessed (Id, MailboxId, ProviderMessageId, AttachmentId, WorkflowInstanceId, ProcessedAtUtc)
             VALUES (@Id, @MailboxId, @MessageId, @AttachmentId, @InstanceId, SYSUTCDATETIME());
             """, connection);
-        cmd.Parameters.AddWithValue("@Id", Guid.NewGuid());
-        cmd.Parameters.AddWithValue("@MailboxId", mailboxId);
-        cmd.Parameters.AddWithValue("@MessageId", messageId);
-        cmd.Parameters.AddWithValue("@AttachmentId", attachmentId);
-        cmd.Parameters.AddWithValue("@InstanceId", (object?)instanceId ?? DBNull.Value);
+        cmd.Parameters.Add("@Id", System.Data.SqlDbType.UniqueIdentifier).Value = Guid.NewGuid();
+        cmd.Parameters.Add("@MailboxId", System.Data.SqlDbType.UniqueIdentifier).Value = mailboxId;
+        cmd.Parameters.Add("@MessageId", System.Data.SqlDbType.NVarChar, 450).Value = messageId;
+        cmd.Parameters.Add("@AttachmentId", System.Data.SqlDbType.NVarChar, 256).Value = Truncate(attachmentId, 256);
+        cmd.Parameters.Add("@InstanceId", System.Data.SqlDbType.UniqueIdentifier).Value =
+            (object?)instanceId ?? DBNull.Value;
         try
         {
             await cmd.ExecuteNonQueryAsync(cancellationToken);
+            _logger.LogInformation(
+                "Email ingest recorded processed MailboxId={MailboxId} MessageKey={MessageKey} AttachmentKey={AttachmentKey}",
+                mailboxId,
+                messageId,
+                Truncate(attachmentId, 256));
         }
         catch (SqlException ex) when (ex.Number is 2627 or 2601)
         {
             // unique violation — already processed
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Email ingest FAILED to record processed MailboxId={MailboxId} MessageKey={MessageKey} AttachmentKey={AttachmentKey}",
+                mailboxId,
+                messageId,
+                Truncate(attachmentId, 256));
+            throw;
+        }
     }
+
+    private async Task TrySetProcessedInstanceIdAsync(
+        Guid mailboxId,
+        string messageId,
+        string attachmentId,
+        Guid? instanceId,
+        CancellationToken cancellationToken)
+    {
+        if (instanceId == null || instanceId == Guid.Empty)
+            return;
+
+        try
+        {
+            var cs = RequireConnectionString();
+            await using var connection = new SqlConnection(cs);
+            await connection.OpenAsync(cancellationToken);
+            await using var cmd = new SqlCommand(
+                """
+                UPDATE dbo.EmailIngestProcessed
+                SET WorkflowInstanceId = @InstanceId
+                WHERE MailboxId = @MailboxId
+                  AND ProviderMessageId = @MessageId
+                  AND AttachmentId = @AttachmentId;
+                """, connection);
+            cmd.Parameters.Add("@InstanceId", System.Data.SqlDbType.UniqueIdentifier).Value = instanceId.Value;
+            cmd.Parameters.Add("@MailboxId", System.Data.SqlDbType.UniqueIdentifier).Value = mailboxId;
+            cmd.Parameters.Add("@MessageId", System.Data.SqlDbType.NVarChar, 450).Value = messageId;
+            cmd.Parameters.Add("@AttachmentId", System.Data.SqlDbType.NVarChar, 256).Value = Truncate(attachmentId, 256);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Email ingest could not set WorkflowInstanceId on processed row.");
+        }
+    }
+
+    private async Task TryMarkMessageReadAsync(Guid connectorId, string messageId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _oauthService.MarkMailMessageReadAsync(connectorId, messageId, cancellationToken);
+        }
+        catch (Exception markEx)
+        {
+            _logger.LogWarning(
+                markEx,
+                "Email ingest mark-as-read failed for message {MessageId} (dedup still prevents re-start).",
+                messageId);
+        }
+    }
+
+    /// <summary>Fits unique index; hashes oversize Outlook Graph message ids.</summary>
+    private static string NormalizeProviderMessageId(string messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+            return messageId;
+        if (messageId.Length <= 450)
+            return messageId;
+        return "h:" + Sha256Hex(messageId);
+    }
+
+    /// <summary>
+    /// Stable short key for dedup. Raw Outlook attachment ids change/are huge; filename+size is stable.
+    /// </summary>
+    private static string BuildAttachmentDedupKey(ConnectorGmailAttachmentDto att)
+    {
+        var fileName = (att.FileName ?? string.Empty).Trim();
+        var size = att.SizeBytes?.ToString() ?? "";
+        var mime = (att.MimeType ?? string.Empty).Trim();
+        var raw = !string.IsNullOrEmpty(fileName)
+            ? $"fn:{fileName}|sz:{size}|mt:{mime}"
+            : $"id:{att.Id}";
+        return "a:" + Sha256Hex(raw);
+    }
+
+    private static string Sha256Hex(string value)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static string Truncate(string value, int maxLen) =>
+        value.Length <= maxLen ? value : value[..maxLen];
 
     private async Task UpdatePollStatusAsync(Guid mailboxId, string? error, CancellationToken cancellationToken)
     {
@@ -498,6 +695,66 @@ public sealed class EmailIngestService : IEmailIngestService
             return false;
         var ext = Path.GetExtension(fileName);
         return !string.IsNullOrEmpty(ext) && extensions.Contains(ext);
+    }
+
+    /// <summary>
+    /// Prefer PDF/docs over signature images. If a message has both a PDF and badge PNGs, only the PDF is ingested.
+    /// </summary>
+    private static List<ConnectorGmailAttachmentDto> SelectIngestAttachments(
+        IReadOnlyList<ConnectorGmailAttachmentDto> attachments,
+        HashSet<string> allowedExtensions)
+    {
+        var candidates = attachments
+            .Where(a => MatchesExtension(a.FileName, allowedExtensions))
+            .Where(a => !IsLikelySignatureOrInlineImage(a))
+            .ToList();
+
+        var documents = candidates.Where(IsDocumentAttachment).ToList();
+        if (documents.Count > 0)
+            return documents;
+
+        // No document — do not fall back to small signature images.
+        return candidates.Where(a => !IsImageAttachment(a)).ToList();
+    }
+
+    private static bool IsDocumentAttachment(ConnectorGmailAttachmentDto a)
+    {
+        var ext = Path.GetExtension(a.FileName ?? string.Empty);
+        if (DocumentExtensions.Contains(ext))
+            return true;
+        var mime = a.MimeType ?? string.Empty;
+        return mime.Contains("pdf", StringComparison.OrdinalIgnoreCase)
+            || mime.Contains("tiff", StringComparison.OrdinalIgnoreCase)
+            || mime.Contains("msword", StringComparison.OrdinalIgnoreCase)
+            || mime.Contains("officedocument", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsImageAttachment(ConnectorGmailAttachmentDto a)
+    {
+        var ext = Path.GetExtension(a.FileName ?? string.Empty);
+        if (ImageExtensions.Contains(ext))
+            return true;
+        var mime = a.MimeType ?? string.Empty;
+        return mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsLikelySignatureOrInlineImage(ConnectorGmailAttachmentDto a)
+    {
+        if (!IsImageAttachment(a))
+            return false;
+
+        // Signature / badge images are usually small; invoice scans are larger.
+        if (a.SizeBytes is > 0 and < 200_000)
+            return true;
+
+        var name = Path.GetFileNameWithoutExtension(a.FileName ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(name))
+            return true;
+
+        if (Regex.IsMatch(name, @"^(image|img|logo|signature|sig|banner|badge|icon|cid_|untitled)\d*$", RegexOptions.IgnoreCase))
+            return true;
+
+        return false;
     }
 
     private string RequireConnectionString() =>

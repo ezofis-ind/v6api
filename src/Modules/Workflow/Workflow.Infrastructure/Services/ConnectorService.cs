@@ -124,10 +124,6 @@ public sealed class ConnectorService : IConnectorService
 
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-
-        if (!await TableExistsAsync(connection, "connector", cancellationToken))
-            return Array.Empty<ConnectorDto>();
-
         await EnsureConnectorSchemaAsync(connection, cancellationToken);
 
         var showDeletedOnly = !string.Equals(request.Mode, "browse", StringComparison.OrdinalIgnoreCase);
