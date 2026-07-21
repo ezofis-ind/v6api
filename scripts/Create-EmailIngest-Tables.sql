@@ -13,7 +13,7 @@ BEGIN
         MasterSource NVARCHAR(32) NOT NULL CONSTRAINT DF_EmailIngestMailbox_MasterSource DEFAULT (N'InternalForm'),
         MasterFormId NVARCHAR(128) NULL,
         MasterConnectorId UNIQUEIDENTIFIER NULL,
-        AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.png,.jpg,.jpeg,.tif,.tiff'),
+        AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.tif,.tiff'),
         LastPolledAtUtc DATETIME2(3) NULL,
         LastError NVARCHAR(2000) NULL,
         CreatedAtUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Created DEFAULT (SYSUTCDATETIME()),
@@ -32,7 +32,7 @@ BEGIN
     CREATE TABLE dbo.EmailIngestProcessed (
         Id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EmailIngestProcessed PRIMARY KEY,
         MailboxId UNIQUEIDENTIFIER NOT NULL,
-        ProviderMessageId NVARCHAR(256) NOT NULL,
+        ProviderMessageId NVARCHAR(450) NOT NULL,
         AttachmentId NVARCHAR(256) NOT NULL,
         WorkflowInstanceId UNIQUEIDENTIFIER NULL,
         ProcessedAtUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EmailIngestProcessed_At DEFAULT (SYSUTCDATETIME()),

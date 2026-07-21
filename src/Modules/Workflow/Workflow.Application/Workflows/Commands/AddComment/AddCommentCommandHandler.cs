@@ -26,6 +26,10 @@ public sealed class AddCommentCommandHandler : IRequestHandler<AddCommentCommand
 
         var tableName = _dynamicTableRepository.GetTableName(request.WorkflowId, "WorkflowComments");
 
+        // Skip v5 proceed echoes like "2MH_xxx: Matched" — belong on move-next review, not comments.
+        if (WorkflowCommentHelper.IsAutomaticRuleProceedComment(request.Comments))
+            return new AddCommentCommandResult(Guid.Empty, request.WorkflowId, request.WorkflowInstanceId, tableName, Skipped: true);
+
         var commentId = await _dynamicTableRepository.AddCommentAsync(
             request.WorkflowId,
             request.WorkflowInstanceId,

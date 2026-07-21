@@ -374,9 +374,13 @@ internal sealed class GmailConnectorAdapter : ConnectorProviderAdapterBase
             body.TryGetProperty("attachmentId", out var aid) &&
             !string.IsNullOrWhiteSpace(aid.GetString()))
         {
-            long? size = body.TryGetProperty("size", out var s) ? s.GetInt64() : null;
-            string? mime = part.TryGetProperty("mimeType", out var mt) ? mt.GetString() : null;
-            attachments.Add((aid.GetString()!, fn.GetString(), mime, size));
+            // Skip inline / embedded signature images (Content-Disposition: inline or Content-ID).
+            if (!IsInlineGmailPart(part))
+            {
+                long? size = body.TryGetProperty("size", out var s) ? s.GetInt64() : null;
+                string? mime = part.TryGetProperty("mimeType", out var mt) ? mt.GetString() : null;
+                attachments.Add((aid.GetString()!, fn.GetString(), mime, size));
+            }
         }
 
         if (part.TryGetProperty("parts", out var parts))
@@ -384,5 +388,39 @@ internal sealed class GmailConnectorAdapter : ConnectorProviderAdapterBase
             foreach (var child in parts.EnumerateArray())
                 CollectAttachments(child, attachments);
         }
+    }
+
+    private static bool IsInlineGmailPart(JsonElement part)
+    {
+        if (!part.TryGetProperty("headers", out var headers) || headers.ValueKind != JsonValueKind.Array)
+            return false;
+
+        var hasContentId = false;
+        foreach (var h in headers.EnumerateArray())
+        {
+            var name = h.TryGetProperty("name", out var n) ? n.GetString() : null;
+            var value = h.TryGetProperty("value", out var v) ? v.GetString() : null;
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(value))
+                continue;
+
+            if (name.Equals("Content-Disposition", StringComparison.OrdinalIgnoreCase)
+                && value.Contains("inline", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (name.Equals("Content-ID", StringComparison.OrdinalIgnoreCase))
+                hasContentId = true;
+        }
+
+        // Embedded signature images usually have Content-ID + image mime.
+        if (hasContentId
+            && part.TryGetProperty("mimeType", out var mt)
+            && (mt.GetString() ?? string.Empty).StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 }

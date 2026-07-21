@@ -246,6 +246,8 @@ public sealed class EzofisAuthService : IEzofisAuthService
 
         var safeDisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? safeEmail : user.DisplayName;
         var safeRole = string.IsNullOrWhiteSpace(user.Role) ? "User" : user.Role;
+        if (safeRole.Equals("Administrator", StringComparison.OrdinalIgnoreCase))
+            safeRole = "Admin";
 
         return new LoginSuccess(
             user.Id,

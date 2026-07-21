@@ -49,13 +49,15 @@ public interface IWorkflowApAgentMoveNextService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// After AP Agent move-next: read latest agentDataValidation row for the instance and
-    /// apply matching scalar <c>po_row</c> fields to ezfb form data (formId + formEntryId).
+    /// Apply <c>po_row</c> fields to ezfb form data (formId + formEntryId).
+    /// Prefers <paramref name="agentResponseJson"/> from the move-next body when provided;
+    /// otherwise falls back to the latest stored agentDataValidation row.
     /// </summary>
     Task<int> ApplyPoRowFromStoredAgentValidationAsync(
         Guid workflowId,
         Guid workflowInstanceId,
         string formId,
         int formEntryId,
+        string? agentResponseJson = null,
         CancellationToken cancellationToken = default);
 }

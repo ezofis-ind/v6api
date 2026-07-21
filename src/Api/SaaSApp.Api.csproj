@@ -54,6 +54,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="..\..\scripts\CreatePlaygroundApiKeySchema.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>scripts\CreatePlaygroundApiKeySchema.sql</Link>
+    </None>
+    <None Update="..\..\scripts\CreatePlaygroundApiKeyCatalog.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>scripts\CreatePlaygroundApiKeyCatalog.sql</Link>
+    </None>
     <None Update="..\..\scripts\CreateWorkflowSchemaComplete.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>scripts\CreateWorkflowSchemaComplete.sql</Link>
@@ -61,6 +69,14 @@
     <None Update="..\..\scripts\CreateDmsSchema.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>scripts\CreateDmsSchema.sql</Link>
+    </None>
+    <None Update="..\..\scripts\Create-Connector-Table.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>scripts\Create-Connector-Table.sql</Link>
+    </None>
+    <None Update="..\..\scripts\Create-EmailIngest-Tables.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>scripts\Create-EmailIngest-Tables.sql</Link>
     </None>
     <None Update="appsettings.ActivityLog.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
