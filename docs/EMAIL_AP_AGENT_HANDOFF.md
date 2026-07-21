@@ -84,6 +84,12 @@ For QuickBooks masters use `"masterSource": "QuickBooks"` + `"masterConnectorId"
 - `Email ingest · schedule all tenants` (orchestrator)
 - `Email ingest · {TenantName}` per tenant (args include `tenantId` + `tenantName`; also job parameters `TenantId` / `TenantName`)
 
+Other Hangfire jobs also show tenant name in the dashboard title:
+- `AP Agent · {TenantName}`
+- `Master file import · {TenantName}`
+- `Archive stage · {TenantName}`
+- `Welcome email · {TenantName}`
+
 ## Mail ops (Gmail + Outlook, same routes)
 
 | Method | Path |

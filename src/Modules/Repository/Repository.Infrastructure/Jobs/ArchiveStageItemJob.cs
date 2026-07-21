@@ -27,12 +27,18 @@ public sealed class ArchiveStageItemJob
 
     [DisableConcurrentExecution(timeoutInSeconds: 600)]
     [AutomaticRetry(Attempts = 2)]
-    public async Task Execute(ArchiveStageJobArgs args, PerformContext? context)
+    [JobDisplayName("Archive stage · {0}")]
+    public async Task Execute(string tenantDisplay, ArchiveStageJobArgs args, PerformContext? context)
     {
         var jobId = context?.BackgroundJob.Id ?? "unknown";
+        context?.SetJobParameter("TenantId", args.TenantId.ToString("D"));
+        context?.SetJobParameter("TenantName", tenantDisplay);
+
         _logger.LogInformation(
-            "Archive stage job {JobId} started for repository {RepositoryId}, stage {StageId}",
+            "Archive stage job {JobId} started for tenant {TenantDisplay} ({TenantId}), repository {RepositoryId}, stage {StageId}",
             jobId,
+            tenantDisplay,
+            args.TenantId,
             args.RepositoryId,
             args.StageId);
 
@@ -43,65 +49,73 @@ public sealed class ArchiveStageItemJob
         using var scope = _scopeFactory.CreateScope();
         var services = scope.ServiceProvider;
         services.GetRequiredService<ITenantConnectionProvider>().SetConnectionString(connectionString);
-        services.GetRequiredService<JobExecutionContext>().Set(args.TenantId, args.UserId ?? Guid.Empty);
+        var jobContext = services.GetRequiredService<JobExecutionContext>();
+        jobContext.Set(args.TenantId, args.UserId ?? Guid.Empty);
 
-        var provisioner = services.GetRequiredService<IStaticRepositoryProvisioner>();
-        var storageSeed = services.GetRequiredService<IRepositoryStorageSeedService>();
-        var fileStorage = services.GetRequiredService<IRepositoryFileStorage>();
-        var archiveUpload = services.GetRequiredService<IRepositoryArchiveFileUploadService>();
+        try
+        {
+            var provisioner = services.GetRequiredService<IStaticRepositoryProvisioner>();
+            var storageSeed = services.GetRequiredService<IRepositoryStorageSeedService>();
+            var fileStorage = services.GetRequiredService<IRepositoryFileStorage>();
+            var archiveUpload = services.GetRequiredService<IRepositoryArchiveFileUploadService>();
 
-        var repo = await provisioner.GetRepositoryAsync(args.RepositoryId, args.TenantId, default)
-            ?? throw new InvalidOperationException("Repository not found.");
+            var repo = await provisioner.GetRepositoryAsync(args.RepositoryId, args.TenantId, default)
+                ?? throw new InvalidOperationException("Repository not found.");
 
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync();
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync();
 
-        var row = await RepositoryStageStore.GetAsync(connection, repo, args.TenantId, args.StageId, default)
-            ?? throw new InvalidOperationException("Stage row not found.");
+            var row = await RepositoryStageStore.GetAsync(connection, repo, args.TenantId, args.StageId, default)
+                ?? throw new InvalidOperationException("Stage row not found.");
 
-        if (string.IsNullOrWhiteSpace(row.FilePath) || string.IsNullOrWhiteSpace(row.FileName))
-            throw new InvalidOperationException("Stage row is missing file path or name.");
+            if (string.IsNullOrWhiteSpace(row.FilePath) || string.IsNullOrWhiteSpace(row.FileName))
+                throw new InvalidOperationException("Stage row is missing file path or name.");
 
-        var providers = await storageSeed.ListProvidersAsync(args.TenantId, default);
-        var providerCode = providers.First(p => p.Id == row.StorageProviderId).Code;
+            var providers = await storageSeed.ListProvidersAsync(args.TenantId, default);
+            var providerCode = providers.First(p => p.Id == row.StorageProviderId).Code;
 
-        await using var source = await fileStorage.OpenReadAsync(
-            args.TenantId,
-            row.FilePath,
-            providerCode,
-            default);
+            await using var source = await fileStorage.OpenReadAsync(
+                args.TenantId,
+                row.FilePath,
+                providerCode,
+                default);
 
-        await using var buffer = new MemoryStream();
-        await source.CopyToAsync(buffer);
-        buffer.Position = 0;
+            await using var buffer = new MemoryStream();
+            await source.CopyToAsync(buffer);
+            buffer.Position = 0;
 
-        var metadataJson = System.Text.Json.JsonSerializer.Serialize(row.FieldValues);
-        var uploadRequest = new RepositoryUploadItemRequest(
-            buffer,
-            row.FileName,
-            row.FileType,
-            FileSize: row.FileSize,
-            Metadata: metadataJson);
+            var metadataJson = System.Text.Json.JsonSerializer.Serialize(row.FieldValues);
+            var uploadRequest = new RepositoryUploadItemRequest(
+                buffer,
+                row.FileName,
+                row.FileType,
+                FileSize: row.FileSize,
+                Metadata: metadataJson);
 
-        var result = await archiveUpload.UploadItemAsync(
-            args.RepositoryId,
-            args.TenantId,
-            uploadRequest,
-            args.UserId,
-            default);
+            var result = await archiveUpload.UploadItemAsync(
+                args.RepositoryId,
+                args.TenantId,
+                uploadRequest,
+                args.UserId,
+                default);
 
-        await RepositoryStageStore.MarkArchivedAsync(
-            connection,
-            repo.StageTableName,
-            args.TenantId,
-            args.StageId,
-            result.ItemId,
-            default);
+            await RepositoryStageStore.MarkArchivedAsync(
+                connection,
+                repo.StageTableName,
+                args.TenantId,
+                args.StageId,
+                result.ItemId,
+                default);
 
-        _logger.LogInformation(
-            "Archive stage job {JobId} completed. Stage {StageId} promoted to item {ItemId}",
-            jobId,
-            args.StageId,
-            result.ItemId);
+            _logger.LogInformation(
+                "Archive stage job {JobId} completed. Stage {StageId} promoted to item {ItemId}",
+                jobId,
+                args.StageId,
+                result.ItemId);
+        }
+        finally
+        {
+            jobContext.Clear();
+        }
     }
 }

@@ -1,4 +1,7 @@
 using Microsoft.Extensions.Logging;
+using Hangfire;
+using Hangfire.Server;
+using SaaSApp.MultiTenancy;
 
 namespace SaaSApp.Users.Infrastructure.Jobs;
 
@@ -14,11 +17,19 @@ public sealed class SendWelcomeEmailJob
         _logger = logger;
     }
 
-    public Task Execute(Guid userId, string email, string displayName)
+    [JobDisplayName("Welcome email · {0}")]
+    public Task Execute(string tenantDisplay, Guid tenantId, Guid userId, string email, string displayName, PerformContext? context)
     {
+        context?.SetJobParameter("TenantId", tenantId.ToString("D"));
+        context?.SetJobParameter("TenantName", tenantDisplay);
+
         _logger.LogInformation(
-            "Welcome email job: UserId={UserId}, Email={Email}, DisplayName={DisplayName}",
-            userId, email, displayName);
+            "Welcome email job: Tenant={TenantDisplay} ({TenantId}), UserId={UserId}, Email={Email}, DisplayName={DisplayName}",
+            tenantDisplay,
+            tenantId,
+            userId,
+            email,
+            displayName);
         // TODO: Integrate with email provider (SendGrid, etc.)
         return Task.CompletedTask;
     }

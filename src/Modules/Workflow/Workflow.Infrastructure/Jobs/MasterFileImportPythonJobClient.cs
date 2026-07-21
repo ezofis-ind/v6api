@@ -1,13 +1,23 @@
 using Hangfire;
+using SaaSApp.MultiTenancy;
 using SaaSApp.Workflow.Application.Contracts;
 
 namespace SaaSApp.Workflow.Infrastructure.Jobs;
 
 public sealed class MasterFileImportPythonJobClient : IMasterFileImportPythonJobClient
 {
-    public Task<string> EnqueueAsync(MasterFileImportPythonJobArgs args, CancellationToken cancellationToken = default)
+    private readonly ITenantDisplayResolver _tenantDisplay;
+
+    public MasterFileImportPythonJobClient(ITenantDisplayResolver tenantDisplay)
     {
-        var jobId = BackgroundJob.Enqueue<RunMasterFileImportPythonJob>(j => j.Execute(args, null));
-        return Task.FromResult(jobId);
+        _tenantDisplay = tenantDisplay;
+    }
+
+    public async Task<string> EnqueueAsync(MasterFileImportPythonJobArgs args, CancellationToken cancellationToken = default)
+    {
+        var tenantDisplay = await _tenantDisplay.ResolveAsync(args.TenantId, cancellationToken);
+        var jobId = BackgroundJob.Enqueue<RunMasterFileImportPythonJob>(j =>
+            j.Execute(tenantDisplay, args, null));
+        return jobId;
     }
 }
