@@ -10,7 +10,8 @@ using SaaSApp.Workflow.Application.Contracts;
 namespace SaaSApp.Workflow.Infrastructure.Jobs;
 
 /// <summary>
-/// Recurring Hangfire job: for each active tenant, poll due EmailIngestMailbox rows.
+/// Recurring Hangfire job: schedules one per-tenant email-ingest poll so the dashboard
+/// shows tenant name/id (jobs run for every active tenant).
 /// </summary>
 public sealed class RunEmailIngestPollJob
 {
@@ -33,7 +34,9 @@ public sealed class RunEmailIngestPollJob
         _logger = logger;
     }
 
+    /// <summary>Recurring entry: enqueue one visible Hangfire job per active tenant.</summary>
     [AutomaticRetry(Attempts = 0)]
+    [JobDisplayName("Email ingest · schedule all tenants")]
     public async Task Execute(PerformContext? context)
     {
         await using var catalog = await _catalogFactory.CreateDbContextAsync();
@@ -41,46 +44,103 @@ public sealed class RunEmailIngestPollJob
             .AsNoTracking()
             .Where(t => t.IsActive)
             .Select(t => new { t.Id, t.Name })
+            .OrderBy(t => t.Name)
             .ToListAsync();
 
+        _logger.LogInformation(
+            "Email ingest schedule: enqueueing polls for {TenantCount} active tenant(s)",
+            tenants.Count);
+
+        var enqueued = 0;
         foreach (var tenant in tenants)
         {
+            var connectionString = await _connectionStringResolver.GetConnectionStringAsync(tenant.Id);
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                _logger.LogDebug(
+                    "Email ingest skip tenant {TenantId} ({TenantName}): no connection string",
+                    tenant.Id,
+                    tenant.Name);
+                continue;
+            }
+
+            // Separate Hangfire job so dashboard lists tenant name (arg {1}) and id (arg {0}).
+            BackgroundJob.Enqueue<RunEmailIngestPollJob>(j =>
+                j.ExecuteForTenant(tenant.Id, tenant.Name ?? tenant.Id.ToString("D"), null));
+            enqueued++;
+        }
+
+        _logger.LogInformation("Email ingest schedule: enqueued {Enqueued} tenant poll job(s)", enqueued);
+    }
+
+    /// <summary>Per-tenant poll — appears in Hangfire as "Email ingest · {TenantName}".</summary>
+    [AutomaticRetry(Attempts = 0)]
+    [JobDisplayName("Email ingest · {1}")]
+    public async Task ExecuteForTenant(Guid tenantId, string tenantName, PerformContext? context)
+    {
+        var label = string.IsNullOrWhiteSpace(tenantName) ? tenantId.ToString("D") : tenantName.Trim();
+
+        try
+        {
+            context?.SetJobParameter("TenantId", tenantId.ToString("D"));
+            context?.SetJobParameter("TenantName", label);
+
+            var connectionString = await _connectionStringResolver.GetConnectionStringAsync(tenantId);
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                _logger.LogWarning(
+                    "Email ingest tenant {TenantId} ({TenantName}): no connection string",
+                    tenantId,
+                    label);
+                return;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var services = scope.ServiceProvider;
+            services.GetRequiredService<ITenantConnectionProvider>().SetConnectionString(connectionString);
+            var jobContext = services.GetRequiredService<JobExecutionContext>();
+            jobContext.Set(tenantId, SystemUserId);
+
             try
             {
-                var connectionString = await _connectionStringResolver.GetConnectionStringAsync(tenant.Id);
-                if (string.IsNullOrWhiteSpace(connectionString))
-                    continue;
+                var ingest = services.GetRequiredService<IEmailIngestService>();
+                var results = await ingest.PollDueMailboxesAsync();
+                var started = results.Sum(r => r.AttachmentsStarted);
+                var skipped = results.Sum(r => r.SkippedAlreadyProcessed);
+                var scanned = results.Sum(r => r.MessagesScanned);
+                var errors = results.Where(r => !string.IsNullOrWhiteSpace(r.Error)).Select(r => r.Error!).ToList();
 
-                using var scope = _scopeFactory.CreateScope();
-                var services = scope.ServiceProvider;
-                services.GetRequiredService<ITenantConnectionProvider>().SetConnectionString(connectionString);
-                var jobContext = services.GetRequiredService<JobExecutionContext>();
-                jobContext.Set(tenant.Id, SystemUserId);
-
-                try
+                if (started > 0 || errors.Count > 0 || results.Count > 0)
                 {
-                    var ingest = services.GetRequiredService<IEmailIngestService>();
-                    var results = await ingest.PollDueMailboxesAsync();
-                    var started = results.Sum(r => r.AttachmentsStarted);
-                    if (started > 0 || results.Any(r => r.Error != null))
-                    {
-                        _logger.LogInformation(
-                            "Email ingest tenant {TenantId} ({TenantName}): {MailboxCount} mailbox(es), {Started} attachment(s) started",
-                            tenant.Id,
-                            tenant.Name,
-                            results.Count,
-                            started);
-                    }
+                    _logger.LogInformation(
+                        "Email ingest tenant {TenantId} ({TenantName}): mailboxes={MailboxCount}, scanned={Scanned}, started={Started}, skipped={Skipped}, errors={ErrorCount}",
+                        tenantId,
+                        label,
+                        results.Count,
+                        scanned,
+                        started,
+                        skipped,
+                        errors.Count);
                 }
-                finally
+
+                foreach (var err in errors)
                 {
-                    jobContext.Clear();
+                    _logger.LogWarning(
+                        "Email ingest tenant {TenantId} ({TenantName}) mailbox error: {Error}",
+                        tenantId,
+                        label,
+                        err);
                 }
             }
-            catch (Exception ex)
+            finally
             {
-                _logger.LogError(ex, "Email ingest poll failed for tenant {TenantId}", tenant.Id);
+                jobContext.Clear();
             }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Email ingest poll failed for tenant {TenantId} ({TenantName})", tenantId, label);
+            throw;
         }
     }
 }
