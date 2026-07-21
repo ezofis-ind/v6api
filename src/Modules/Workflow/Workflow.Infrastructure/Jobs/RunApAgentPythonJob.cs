@@ -28,13 +28,20 @@ public sealed class RunApAgentPythonJob
     }
 
     [AutomaticRetry(Attempts = 0)]
-    public async Task Execute(ApAgentPythonJobArgs args, PerformContext? context)
+    [JobDisplayName("AP Agent · {0}")]
+    public async Task Execute(string tenantDisplay, ApAgentPythonJobArgs args, PerformContext? context)
     {
         var jobId = context?.BackgroundJob.Id
             ?? throw new InvalidOperationException("Hangfire PerformContext is required for AP Agent jobs.");
+
+        context?.SetJobParameter("TenantId", args.TenantId.ToString("D"));
+        context?.SetJobParameter("TenantName", tenantDisplay);
+
         _logger.LogInformation(
-            "AP Agent Python job {JobId} started for workflow {WorkflowId}, instance {InstanceId}",
+            "AP Agent Python job {JobId} started for tenant {TenantDisplay} ({TenantId}), workflow {WorkflowId}, instance {InstanceId}",
             jobId,
+            tenantDisplay,
+            args.TenantId,
             args.WorkflowId,
             args.InstanceId);
 

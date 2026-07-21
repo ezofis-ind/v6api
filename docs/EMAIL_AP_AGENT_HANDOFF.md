@@ -80,6 +80,16 @@ For QuickBooks masters use `"masterSource": "QuickBooks"` + `"masterConnectorId"
 5. Manual test: `POST /api/email-ingest/mailboxes/{id}/poll`
 6. List/status: `GET /api/email-ingest/mailboxes`
 
+**Hangfire:** recurring job `email-ingest-poll` enqueues **one job per active tenant**. In `/hangfire` you will see:
+- `Email ingest · schedule all tenants` (orchestrator)
+- `Email ingest · {TenantName}` per tenant (args include `tenantId` + `tenantName`; also job parameters `TenantId` / `TenantName`)
+
+Other Hangfire jobs also show tenant name in the dashboard title:
+- `AP Agent · {TenantName}`
+- `Master file import · {TenantName}`
+- `Archive stage · {TenantName}`
+- `Welcome email · {TenantName}`
+
 ## Mail ops (Gmail + Outlook, same routes)
 
 | Method | Path |

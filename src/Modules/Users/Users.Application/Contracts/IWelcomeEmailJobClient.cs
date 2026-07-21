@@ -5,5 +5,5 @@ namespace SaaSApp.Users.Application.Contracts;
 /// </summary>
 public interface IWelcomeEmailJobClient
 {
-    void EnqueueWelcomeEmail(Guid userId, string email, string displayName);
+    Task EnqueueWelcomeEmailAsync(Guid tenantId, Guid userId, string email, string displayName, CancellationToken cancellationToken = default);
 }
