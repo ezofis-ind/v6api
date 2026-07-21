@@ -530,7 +530,7 @@ public sealed class EmailIngestService : IEmailIngestService
         CancellationToken cancellationToken)
     {
         // Mark READ in Gmail/Outlook first — do not wait for workflow start/complete.
-        await TryMarkMessageReadAsync(connectorId, providerMessageId, cancellationToken);
+        await TryMarkMessageReadAsync(mailboxId, connectorId, providerMessageId, cancellationToken);
         // Then claim in DB so Hangfire never picks this message again even if start fails.
         await MarkProcessedAsync(mailboxId, messageKey, MessageHandledSentinel, null, cancellationToken);
     }
@@ -612,7 +612,8 @@ public sealed class EmailIngestService : IEmailIngestService
         }
     }
 
-    private async Task TryMarkMessageReadAsync(Guid connectorId, string messageId, CancellationToken cancellationToken)
+    private async Task TryMarkMessageReadAsync(
+        Guid mailboxId, Guid connectorId, string messageId, CancellationToken cancellationToken)
     {
         try
         {
@@ -624,6 +625,36 @@ public sealed class EmailIngestService : IEmailIngestService
                 markEx,
                 "Email ingest mark-as-read failed for message {MessageId} (dedup still prevents re-start).",
                 messageId);
+
+            // Surface scope / Graph / Gmail errors on the mailbox (does not clear LastPolledAtUtc).
+            var detail = markEx.Message.Length > 1800 ? markEx.Message[..1800] : markEx.Message;
+            await SetMailboxLastErrorAsync(
+                mailboxId,
+                $"mark-as-read failed for message {messageId}: {detail}. Re-authorize Gmail (gmail.modify) or Outlook (Mail.ReadWrite) if this is a 403.",
+                cancellationToken);
+        }
+    }
+
+    private async Task SetMailboxLastErrorAsync(Guid mailboxId, string error, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var cs = RequireConnectionString();
+            await using var connection = new SqlConnection(cs);
+            await connection.OpenAsync(cancellationToken);
+            await using var cmd = new SqlCommand(
+                """
+                UPDATE dbo.EmailIngestMailbox
+                SET LastError = @Error, ModifiedAtUtc = SYSUTCDATETIME()
+                WHERE Id = @Id AND IsDeleted = 0;
+                """, connection);
+            cmd.Parameters.AddWithValue("@Id", mailboxId);
+            cmd.Parameters.AddWithValue("@Error", error.Length > 2000 ? error[..2000] : error);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not persist EmailIngestMailbox.LastError for {MailboxId}", mailboxId);
         }
     }
 
