@@ -54,7 +54,9 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
 
         var tableColumns = await RepositoryItemTableColumns.LoadAsync(connection, repo.ItemsTableName, cancellationToken);
         var allowedColumns = RepositoryItemFilterHelper.BuildFilterableColumns(repo, tableColumns);
-        var filters = RepositoryItemFilterHelper.ParseFilters(query.Filters);
+        var filters = RepositoryItemFilterHelper.ParseItemFilters(query.Filters)
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        var statusValues = RepositoryItemFilterHelper.ExtractStatusFilterValues(filters, allowedColumns, repo);
 
         var page = Math.Max(1, query.Page);
         var pageSize = Math.Clamp(query.PageSize, 1, RepositoryItemCursorHelper.MaxPageSize);
@@ -71,6 +73,14 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
 
         var where = new List<string> { "i.RepositoryId = @RepositoryId", "i.IsDeleted = 0" };
         var parameters = new List<SqlParameter> { new("@RepositoryId", repositoryId) };
+
+        if (statusValues.Count > 0)
+        {
+            var matchingWorkflowIds = await ResolveMatchingWorkflowInstanceIdsAsync(
+                connection, table, repositoryId, tableColumns, statusValues, cancellationToken);
+            RepositoryItemFilterHelper.ApplyDisplayStatusFilter(
+                where, parameters, statusValues, matchingWorkflowIds, tableColumns);
+        }
 
         RepositoryItemFilterHelper.ApplyEqualityFilters(where, parameters, filters, allowedColumns, repo);
 
@@ -170,16 +180,42 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
             ?? throw new InvalidOperationException("Repository not found.");
 
         var allowedColumns = RepositoryItemFilterHelper.BuildFilterableColumns(repo);
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        var tableColumns = await RepositoryItemTableColumns.LoadAsync(connection, repo.ItemsTableName, cancellationToken);
         var col = RepositoryItemFilterHelper.ResolveFilterColumn(fieldName, allowedColumns, repo);
 
         var table = RepositorySqlHelper.QualifiedItemsTable(repo.ItemsTableName);
         limit = Math.Clamp(limit, 1, 500);
 
-        var where = new List<string> { "RepositoryId = @RepositoryId", "IsDeleted = 0", $"[{col}] IS NOT NULL" };
+        var where = new List<string> { "RepositoryId = @RepositoryId", "IsDeleted = 0" };
         var parameters = new List<SqlParameter> { new("@RepositoryId", repositoryId) };
 
-        var scope = RepositoryItemFilterHelper.ParseFilters(scopeFilters);
+        var scope = RepositoryItemFilterHelper.ParseItemFilters(scopeFilters)
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        var statusValues = RepositoryItemFilterHelper.ExtractStatusFilterValues(scope, allowedColumns, repo);
+        if (statusValues.Count > 0)
+        {
+            var matchingWorkflowIds = await ResolveMatchingWorkflowInstanceIdsAsync(
+                connection, table, repositoryId, tableColumns, statusValues, cancellationToken);
+            RepositoryItemFilterHelper.ApplyDisplayStatusFilter(
+                where, parameters, statusValues, matchingWorkflowIds, tableColumns, tableAlias: string.Empty);
+        }
+
         RepositoryItemFilterHelper.ApplyEqualityFilters(where, parameters, scope, allowedColumns, repo, tableAlias: string.Empty);
+
+        // Status facets: prefer values the UI actually shows (workflow + AI + raw columns).
+        if (RepositoryItemFilterHelper.IsStatusFilterColumn(col))
+        {
+            return await GetStatusFacetsAsync(
+                connection, table, tableColumns, where, parameters, limit, cancellationToken);
+        }
+
+        where.Add($"[{col}] IS NOT NULL");
 
         var sql = $"""
             SELECT TOP (@Limit) [{col}] AS Value, COUNT(*) AS Cnt
@@ -189,11 +225,6 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
             ORDER BY COUNT(*) DESC, [{col}];
             """;
 
-        var connectionString = _connectionProvider.ConnectionString
-            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
-
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
         await using var cmd = new SqlCommand(sql, connection);
         RepositorySqlHelper.AddParameters(cmd, parameters);
         cmd.Parameters.AddWithValue("@Limit", limit);
@@ -400,5 +431,141 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
         var contentType = string.IsNullOrWhiteSpace(item.FileType) ? "application/octet-stream" : item.FileType;
         var fileName = string.IsNullOrWhiteSpace(item.FileName) ? "file" : item.FileName;
         return new RepositoryItemFileContent(stream, fileName, contentType, item.FileSize);
+    }
+
+    private static async Task<IReadOnlyList<Guid>> ResolveMatchingWorkflowInstanceIdsAsync(
+        SqlConnection connection,
+        string qualifiedItemsTable,
+        Guid repositoryId,
+        HashSet<string> tableColumns,
+        IReadOnlyList<string> statusValues,
+        CancellationToken cancellationToken)
+    {
+        if (!RepositoryItemTableColumns.Has(tableColumns, "WorkflowInstanceId"))
+            return Array.Empty<Guid>();
+
+        var candidates = new List<Guid>();
+        var sql = $"""
+            SELECT DISTINCT [WorkflowInstanceId]
+            FROM {qualifiedItemsTable}
+            WHERE RepositoryId = @RepositoryId
+              AND IsDeleted = 0
+              AND [WorkflowInstanceId] IS NOT NULL;
+            """;
+        await using (var cmd = new SqlCommand(sql, connection))
+        {
+            cmd.Parameters.AddWithValue("@RepositoryId", repositoryId);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                candidates.Add(reader.GetGuid(0));
+        }
+
+        return await RepositoryItemWorkflowStatusEnricher.FindInstanceIdsWithDisplayStatusAsync(
+            connection, candidates, statusValues, cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<FacetValueDto>> GetStatusFacetsAsync(
+        SqlConnection connection,
+        string qualifiedItemsTable,
+        HashSet<string> tableColumns,
+        IReadOnlyList<string> where,
+        IList<SqlParameter> parameters,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return;
+            var key = value.Trim();
+            counts[key] = counts.TryGetValue(key, out var n) ? n + 1 : 1;
+        }
+
+        var selectParts = new List<string> { "Id" };
+        foreach (var col in new[] { "Status", "StageStatus", "AiStatus", "MatchedStatus", "WorkflowInstanceId" })
+        {
+            if (RepositoryItemTableColumns.Has(tableColumns, col))
+                selectParts.Add($"[{col}]");
+        }
+
+        var sql = $"""
+            SELECT {string.Join(", ", selectParts)}
+            FROM {qualifiedItemsTable}
+            WHERE {string.Join(" AND ", where)};
+            """;
+
+        var rows = new List<(string? Status, string? StageStatus, string? AiStatus, string? MatchedStatus, Guid? WorkflowInstanceId)>();
+        await using (var cmd = new SqlCommand(sql, connection))
+        {
+            RepositorySqlHelper.AddParameters(cmd, parameters);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                string? GetOpt(string name)
+                {
+                    if (!HasOrdinal(reader, name) || reader.IsDBNull(reader.GetOrdinal(name)))
+                        return null;
+                    return Convert.ToString(reader.GetValue(reader.GetOrdinal(name)));
+                }
+
+                Guid? wf = null;
+                if (HasOrdinal(reader, "WorkflowInstanceId") && !reader.IsDBNull(reader.GetOrdinal("WorkflowInstanceId")))
+                    wf = reader.GetGuid(reader.GetOrdinal("WorkflowInstanceId"));
+
+                rows.Add((GetOpt("Status"), GetOpt("StageStatus"), GetOpt("AiStatus"), GetOpt("MatchedStatus"), wf));
+            }
+        }
+
+        var instanceIds = rows
+            .Where(r => r.WorkflowInstanceId is Guid id && id != Guid.Empty)
+            .Select(r => r.WorkflowInstanceId!.Value)
+            .Distinct()
+            .ToList();
+        var statusByInstance = await RepositoryItemWorkflowStatusEnricher.GetDisplayStatusMapAsync(
+            connection, instanceIds, cancellationToken);
+
+        foreach (var row in rows)
+        {
+            if (row.WorkflowInstanceId is Guid wfId
+                && statusByInstance.TryGetValue(wfId, out var wfStatus)
+                && !string.IsNullOrWhiteSpace(wfStatus))
+            {
+                Add(wfStatus);
+                continue;
+            }
+
+            Add(FirstNonEmpty(row.Status, row.StageStatus, row.AiStatus, row.MatchedStatus));
+        }
+
+        return counts
+            .OrderByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(limit)
+            .Select(kv => new FacetValueDto(kv.Key, kv.Value))
+            .ToList();
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v))
+                return v.Trim();
+        }
+
+        return null;
+    }
+
+    private static bool HasOrdinal(SqlDataReader reader, string name)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (string.Equals(reader.GetName(i), name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 }

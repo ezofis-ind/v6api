@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace SaaSApp.Repository.Application.Contracts;
@@ -140,7 +141,10 @@ public sealed class BrowseFolderQuery
 
 /// <summary>
 /// Paged item list. Scope filters are dynamic JSON (keys = sqlColumnName from GET .../items/filter-fields).
-/// Same JSON as browse parentFilters, e.g. {"Supplier":"IndiaLogistics"}.
+/// Single value: {"Supplier":"IndiaLogistics"}.
+/// Multi-value same column (OR / IN): {"Status":["Verifier","Approved"]} (JSON array only — do not comma-split names).
+/// Multiple columns (AND): {"Status":["Verifier","Approved"],"Supplier":["Acme","Beta"],"Currency":"CAD"}.
+/// Prefer POST /api/repositories/{id}/items/query with filters in the body for multi-select.
 /// </summary>
 public sealed class RepositoryItemListQuery
 {
@@ -231,6 +235,7 @@ public sealed record RepositoryItemLineItemRowDto(
     decimal? Gst,
     decimal? Total);
 
+/// <summary>Optional legacy wrapper; workspace API now returns <c>lineItems</c> as a raw JSON array.</summary>
 public sealed record RepositoryItemLineItemsSectionDto(
     IReadOnlyList<RepositoryItemLineItemRowDto> Rows,
     decimal? GrandTotal,
@@ -239,6 +244,7 @@ public sealed record RepositoryItemLineItemsSectionDto(
 /// <summary>
 /// Structured item detail for the document workspace UI (click filename).
 /// Side panels are in <see cref="DetailsRow"/> (document, supplier, AI, system).
+/// <see cref="LineItems"/> is a JSON array of invoice line objects (not wrapped in rows).
 /// </summary>
 public sealed record RepositoryItemWorkspaceDto(
     Guid Id,
@@ -249,7 +255,7 @@ public sealed record RepositoryItemWorkspaceDto(
     Guid StorageProviderId,
     string? StorageProviderCode,
     [property: JsonPropertyName("DetailsRow")] IReadOnlyList<RepositoryItemPanelSectionDto> DetailsRow,
-    RepositoryItemLineItemsSectionDto? LineItems = null);
+    [property: JsonPropertyName("lineItems")] JsonElement? LineItems = null);
 
 public sealed record CreateRepositoryItemRequest(
     Guid? StorageProviderId,

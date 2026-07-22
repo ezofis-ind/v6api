@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using SaaSApp.Workflow.Application;
@@ -486,7 +487,7 @@ ORDER BY t.CreatedAt DESC, t.Id DESC;
       ?? invoiceDate?.AddDays(ParseTermsDays(FirstField(fields, "Terms", "TERMS")));
     var department = FirstField(fields, "Department", "Cost Center", "CostCenter", "GL Category", "GlCategory") ?? "General";
     var matchedStatus = FirstField(fields, "MatchedStatus", "Matched Status", "decision", "AiStatus");
-    var country = ResolveCountry(fields);
+    var country = ResolveCountry(fields, currency);
     var paymentStatus = ResolvePaymentStatus(instanceStatus, review, stageType, dueDate);
     var approvalStatus = ApDashboardFilterSupport.ResolveApprovalStatus(paymentStatus, matchedStatus, review);
     var requestStatus = ApDashboardFilterSupport.ResolveRequestStatus(instanceStatus);
@@ -604,33 +605,200 @@ ORDER BY t.CreatedAt DESC, t.Id DESC;
     return (decimal)Math.Max(0, (end.Value - start.Value).TotalDays);
   }
 
-  private static string? ResolveCountry(IReadOnlyDictionary<string, string> fields)
+  private static string ResolveCountry(IReadOnlyDictionary<string, string> fields, string? currency)
   {
-    var explicitCountry = FirstField(fields, "Country", "CountryCode", "Supplier Country");
-    if (!string.IsNullOrWhiteSpace(explicitCountry))
-      return explicitCountry.Trim().ToUpperInvariant();
+    var explicitCountry = FirstField(
+      fields,
+      "Country",
+      "CountryCode",
+      "Supplier Country",
+      "SupplierCountry",
+      "Vendor Country",
+      "VendorCountry",
+      "Nation",
+      "Billing Country",
+      "Ship Country");
+    var mapped = MapCountryToken(explicitCountry);
+    if (mapped != null)
+      return mapped;
 
-    var address = FirstField(fields, "SupplierAddress", "Supplier Address", "Vendor Address", "VendorAddress");
-    if (string.IsNullOrWhiteSpace(address))
-      return "UN";
-
-    var parts = address.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-    if (parts.Length == 0)
-      return "UN";
-
-    var last = parts[^1];
-    if (last.Length == 2)
-      return last.ToUpperInvariant();
-
-    return last switch
+    foreach (var address in EnumerateAddressCandidates(fields))
     {
-      var s when s.Contains("United States", StringComparison.OrdinalIgnoreCase) => "US",
-      var s when s.Contains("Germany", StringComparison.OrdinalIgnoreCase) => "DE",
-      var s when s.Contains("India", StringComparison.OrdinalIgnoreCase) => "IN",
-      var s when s.Contains("United Kingdom", StringComparison.OrdinalIgnoreCase) || s.Equals("UK", StringComparison.OrdinalIgnoreCase) => "GB",
-      _ => "UN"
+      mapped = InferCountryFromAddress(address);
+      if (mapped != null)
+        return mapped;
+    }
+
+    mapped = InferCountryFromCurrency(currency);
+    return mapped ?? "UN";
+  }
+
+  private static IEnumerable<string> EnumerateAddressCandidates(IReadOnlyDictionary<string, string> fields)
+  {
+    foreach (var key in new[]
+             {
+               "SupplierAddress", "Supplier Address", "Vendor Address", "VendorAddress",
+               "ShipToAddress", "Ship To Address", "Ship-To Address",
+               "PayToAddress", "Pay To Address", "Buyer Address", "Billing Address",
+               "Remit Address", "RemitToAddress"
+             })
+    {
+      var value = FirstField(fields, key);
+      if (!string.IsNullOrWhiteSpace(value))
+        yield return value;
+    }
+  }
+
+  private static string? InferCountryFromAddress(string address)
+  {
+    if (string.IsNullOrWhiteSpace(address))
+      return null;
+
+    var normalized = address.Trim();
+    var mappedWhole = MapCountryToken(normalized);
+    if (mappedWhole != null)
+      return mappedWhole;
+
+    // Canada postal: A1A 1A1 (optional space)
+    if (Regex.IsMatch(normalized, @"\b[A-CEGHJ-NPR-TVXY]\d[A-Z]\s?\d[A-Z]\d\b", RegexOptions.IgnoreCase))
+      return "CA";
+
+    // US ZIP: 12345 or 12345-6789
+    if (Regex.IsMatch(normalized, @"\b\d{5}(?:-\d{4})?\b"))
+    {
+      // Prefer US when a US state code also appears; otherwise still likely US for AP invoices.
+      if (ContainsUsState(normalized) || ContainsUsStateCode(normalized))
+        return "US";
+    }
+
+    if (ContainsCanadianProvince(normalized))
+      return "CA";
+
+    if (ContainsUsState(normalized) || ContainsUsStateCode(normalized))
+      return "US";
+
+    foreach (var part in normalized.Split(
+                 new[] { ',', '|', ';', '/' },
+                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+      mappedWhole = MapCountryToken(part);
+      if (mappedWhole != null)
+        return mappedWhole;
+
+      // "ON M5V 2T6" / "Toronto ON"
+      if (ContainsCanadianProvince(part) ||
+          Regex.IsMatch(part, @"\b[A-CEGHJ-NPR-TVXY]\d[A-Z]\s?\d[A-Z]\d\b", RegexOptions.IgnoreCase))
+        return "CA";
+    }
+
+    // Scan known country names embedded anywhere in the address (any ISO country via RegionInfo).
+    foreach (var (token, code) in ApCountryCatalog.NameTokensLongestFirst)
+    {
+      if (normalized.Contains(token, StringComparison.OrdinalIgnoreCase))
+        return code;
+    }
+
+    return null;
+  }
+
+  private static string? InferCountryFromCurrency(string? currency)
+  {
+    if (string.IsNullOrWhiteSpace(currency))
+      return null;
+
+    return currency.Trim().ToUpperInvariant() switch
+    {
+      "CAD" => "CA",
+      "INR" or "RS" or "₹" => "IN",
+      "GBP" or "£" => "GB",
+      "AUD" => "AU",
+      "NZD" => "NZ",
+      "JPY" or "¥" => "JP",
+      "CNY" or "RMB" => "CN",
+      "MXN" => "MX",
+      "BRL" => "BR",
+      "SGD" => "SG",
+      "AED" => "AE",
+      "CHF" => "CH",
+      "SEK" => "SE",
+      "NOK" => "NO",
+      "DKK" => "DK",
+      "ZAR" => "ZA",
+      "KRW" => "KR",
+      "TRY" or "TL" => "TR",
+      "PLN" => "PL",
+      "THB" => "TH",
+      "MYR" => "MY",
+      "PHP" => "PH",
+      "IDR" => "ID",
+      "VND" => "VN",
+      "HKD" => "HK",
+      "TWD" => "TW",
+      "SAR" => "SA",
+      "QAR" => "QA",
+      "KWD" => "KW",
+      "EGP" => "EG",
+      "NGN" => "NG",
+      "KES" => "KE",
+      "RUB" => "RU",
+      // USD/EUR are too ambiguous globally — do not invent a country from them alone.
+      _ => null
     };
   }
+
+  private static string? MapCountryToken(string? raw) => ApCountryCatalog.MapToCode(raw);
+
+  private static readonly HashSet<string> CanadianProvinces = new(StringComparer.OrdinalIgnoreCase)
+  {
+    "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT",
+    "Alberta", "British Columbia", "Manitoba", "New Brunswick", "Newfoundland",
+    "Nova Scotia", "Ontario", "Prince Edward Island", "Quebec", "Saskatchewan",
+    "Northwest Territories", "Nunavut", "Yukon"
+  };
+
+  private static readonly HashSet<string> UsStateCodes = new(StringComparer.OrdinalIgnoreCase)
+  {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA",
+    "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT",
+    "VA", "WA", "WV", "WI", "WY", "DC"
+  };
+
+  private static readonly string[] UsStateNames =
+  [
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
+    "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky",
+    "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+    "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico",
+    "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania",
+    "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+    "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming", "District of Columbia"
+  ];
+
+  private static bool ContainsCanadianProvince(string text)
+  {
+    // Word-boundary check so "ON" in "Toronto ON M9L" matches, but not random mid-words.
+    foreach (var province in CanadianProvinces)
+    {
+      if (province.Length == 2)
+      {
+        if (Regex.IsMatch(text, $@"\b{province}\b", RegexOptions.IgnoreCase))
+          return true;
+      }
+      else if (text.Contains(province, StringComparison.OrdinalIgnoreCase))
+      {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private static bool ContainsUsStateCode(string text) =>
+    UsStateCodes.Any(code => Regex.IsMatch(text, $@"\b{code}\b", RegexOptions.IgnoreCase));
+
+  private static bool ContainsUsState(string text) =>
+    UsStateNames.Any(name => text.Contains(name, StringComparison.OrdinalIgnoreCase));
 
   private static (DateTime Start, DateTime End) ResolveRange(ApDashboardRequest request)
   {
@@ -657,15 +825,34 @@ ORDER BY t.CreatedAt DESC, t.Id DESC;
     DateTime currentStart,
     DateTime currentEnd)
   {
-    // Today → yesterday; Tomorrow → today; ThisWeek → previous week; otherwise same-length prior window.
-    if (period is ApDashboardPeriod.Today or ApDashboardPeriod.Tomorrow)
-      return DayRange(currentStart.AddDays(-1));
+    // Align previous window to the same calendar shape as the selected period.
+    return period switch
+    {
+      ApDashboardPeriod.Today or ApDashboardPeriod.Tomorrow => DayRange(currentStart.AddDays(-1)),
+      ApDashboardPeriod.ThisWeek => WeekRange(currentStart.AddDays(-7)),
+      ApDashboardPeriod.ThisMonth or ApDashboardPeriod.LastMonth => MonthRange(currentStart.AddMonths(-1)),
+      ApDashboardPeriod.ThisQuarter => PreviousQuarterRange(currentStart),
+      ApDashboardPeriod.ThisYear => (
+        new DateTime(currentStart.Year - 1, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        new DateTime(currentStart.Year - 1, 12, 31, 23, 59, 59, DateTimeKind.Utc).AddTicks(9999999)),
+      _ => SameLengthPriorWindow(currentStart, currentEnd)
+    };
+  }
 
-    if (period == ApDashboardPeriod.ThisWeek)
-      return WeekRange(currentStart.AddDays(-7));
-
+  private static (DateTime Start, DateTime End) SameLengthPriorWindow(DateTime currentStart, DateTime currentEnd)
+  {
     var span = currentEnd - currentStart;
-    return (currentStart - span, currentStart);
+    return (currentStart - span, currentStart.AddTicks(-1));
+  }
+
+  private static (DateTime Start, DateTime End) PreviousQuarterRange(DateTime currentStart)
+  {
+    var prior = currentStart.AddMonths(-3);
+    var quarter = (prior.Month - 1) / 3;
+    var startMonth = quarter * 3 + 1;
+    var start = new DateTime(prior.Year, startMonth, 1, 0, 0, 0, DateTimeKind.Utc);
+    var end = start.AddMonths(3).AddTicks(-1);
+    return (start, end);
   }
 
   private static (DateTime Start, DateTime End) MonthRange(DateTime anchor)

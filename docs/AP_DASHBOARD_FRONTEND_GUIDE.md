@@ -271,12 +271,17 @@ Maps to the top summary strip:
 
 ```json
 {
-  "key": "total_outstanding",
-  "label": "Total Outstanding",
-  "displayValue": "$87.6K",
-  "value": 87579.52,
-  "changePercent": -6.2,
-  "trend": "up"
+  "key": "total_paid",
+  "label": "Total Paid",
+  "displayValue": "$8.1K",
+  "value": 8146.08,
+  "changePercent": 36,
+  "trend": "up",
+  "changeDirection": "up",
+  "comparisonChangeLabel": "36% up",
+  "comparisonPeriodLabel": "vs last month",
+  "comparisonLabel": "36% up vs last month",
+  "previousValue": 5989.76
 }
 ```
 
@@ -284,8 +289,13 @@ Maps to the top summary strip:
 |-------|--------|
 | `displayValue` | Ready-to-show string (`"$3.0K"`, `"2.5 d"`) |
 | `value` | Raw number for charts / math |
-| `changePercent` | vs previous period (`null` if previous was 0 and current > 0) |
-| `trend` | `"up"` \| `"down"` \| `"flat"` (already inverted for “bad” KPIs like overdue) |
+| `changePercent` | Signed MoM % (`0` when both empty; `100` when previous was 0 and current > 0; negative when down) |
+| `trend` | `"up"` \| `"down"` \| `"flat"` — **use for arrow/color** (inverted for “bad” KPIs like overdue) |
+| `changeDirection` | Raw MoM direction `"up"` \| `"down"` \| `"flat"` (not inverted) |
+| `comparisonChangeLabel` | Change text only: `"36% up"`, `"48% down"`, `"Flat"` |
+| `comparisonPeriodLabel` | Period text only: `"vs last month"`, `"vs last week"`, … |
+| `comparisonLabel` | Full footer: `"36% up vs last month"` (or compose `comparisonChangeLabel` + `comparisonPeriodLabel`) |
+| `previousValue` | Previous-period raw value (tooltip / debug) |
 
 ---
 

@@ -43,7 +43,9 @@ internal static class CreditUsageDashboardBuilder
             total,
             transactions.Count,
             AppendTotalRow(highest, total),
-            AppendTotalRow(distribution, total),
+            // Do not append a Total row here — clients sum distribution rows for the
+            // "by activity · N credits" subtitle; including Total doubled the figure (e.g. 20+20=40).
+            distribution,
             overallSplit,
             timeline,
             monthlyConsumption,

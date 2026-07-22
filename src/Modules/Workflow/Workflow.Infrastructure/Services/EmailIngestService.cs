@@ -9,6 +9,7 @@ using SaaSApp.MultiTenancy;
 using SaaSApp.Workflow.Application.Connectors;
 using SaaSApp.Workflow.Application.Contracts;
 using SaaSApp.Workflow.Application.Workflows.Commands.StartWorkflow;
+using SaaSApp.Workflow.Infrastructure.Jobs;
 
 namespace SaaSApp.Workflow.Infrastructure.Services;
 
@@ -214,6 +215,9 @@ public sealed class EmailIngestService : IEmailIngestService
         BindUpsert(cmd, id, request, userId);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
 
+        if (request.IsEnabled && _tenantContext.TenantId is Guid tenantId && tenantId != Guid.Empty)
+            EmailIngestTenantIndex.Register(tenantId, tenantId.ToString("D"));
+
         return (await GetMailboxAsync(id, cancellationToken))!;
     }
 
@@ -248,6 +252,15 @@ public sealed class EmailIngestService : IEmailIngestService
         await using var cmd = new SqlCommand(sql, connection);
         BindUpsert(cmd, id, request, userId);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+
+        if (_tenantContext.TenantId is Guid tenantId && tenantId != Guid.Empty)
+        {
+            if (request.IsEnabled)
+                EmailIngestTenantIndex.Register(tenantId, tenantId.ToString("D"));
+            else if (!await HasEnabledMailboxesAsync(cancellationToken))
+                EmailIngestTenantIndex.Unregister(tenantId);
+        }
+
         return await GetMailboxAsync(id, cancellationToken);
     }
 
@@ -264,7 +277,16 @@ public sealed class EmailIngestService : IEmailIngestService
             WHERE Id = @Id AND IsDeleted = 0;
             """, connection);
         cmd.Parameters.AddWithValue("@Id", id);
-        return await cmd.ExecuteNonQueryAsync(cancellationToken) > 0;
+        var deleted = await cmd.ExecuteNonQueryAsync(cancellationToken) > 0;
+        if (deleted
+            && _tenantContext.TenantId is Guid tenantId
+            && tenantId != Guid.Empty
+            && !await HasEnabledMailboxesAsync(cancellationToken))
+        {
+            EmailIngestTenantIndex.Unregister(tenantId);
+        }
+
+        return deleted;
     }
 
     public async Task<IReadOnlyList<EmailIngestPollResultDto>> PollDueMailboxesAsync(CancellationToken cancellationToken = default)
@@ -280,6 +302,24 @@ public sealed class EmailIngestService : IEmailIngestService
         foreach (var mailbox in due)
             results.Add(await PollMailboxAsync(mailbox.Id, cancellationToken));
         return results;
+    }
+
+    public async Task<bool> HasEnabledMailboxesAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        var cs = RequireConnectionString();
+        await using var connection = new SqlConnection(cs);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var cmd = new SqlCommand(
+            """
+            SELECT TOP 1 1
+            FROM dbo.EmailIngestMailbox
+            WHERE IsDeleted = 0 AND IsEnabled = 1;
+            """,
+            connection);
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result != null && result != DBNull.Value;
     }
 
     public async Task<EmailIngestPollResultDto> PollMailboxAsync(Guid mailboxId, CancellationToken cancellationToken = default)
@@ -444,8 +484,7 @@ public sealed class EmailIngestService : IEmailIngestService
         var source = (request.MasterSource ?? EmailIngestMasterSources.InternalForm).Trim();
         if (string.Equals(source, EmailIngestMasterSources.InternalForm, StringComparison.OrdinalIgnoreCase))
         {
-            if (string.IsNullOrWhiteSpace(request.MasterFormId))
-                throw new InvalidOperationException("masterFormId is required when masterSource is InternalForm.");
+            // masterFormId is recommended for vendor master resolve, but not required to poll mail.
         }
         else if (string.Equals(source, EmailIngestMasterSources.QuickBooks, StringComparison.OrdinalIgnoreCase))
         {

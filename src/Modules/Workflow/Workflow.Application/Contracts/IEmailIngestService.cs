@@ -26,4 +26,7 @@ public interface IEmailIngestService
     Task<EmailIngestPollResultDto> PollMailboxAsync(Guid mailboxId, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<EmailIngestPollResultDto>> PollDueMailboxesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>True when the tenant has at least one enabled, non-deleted email ingest mailbox.</summary>
+    Task<bool> HasEnabledMailboxesAsync(CancellationToken cancellationToken = default);
 }

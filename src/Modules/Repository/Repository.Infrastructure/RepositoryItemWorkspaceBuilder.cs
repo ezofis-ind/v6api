@@ -87,10 +87,12 @@ internal static class RepositoryItemWorkspaceBuilder
         var supplierDetails = BuildSupplierDetails(repository.Fields, fields, currency);
         var aiAnalysis = BuildAiAnalysis(fields);
         var systemInfo = BuildSystemInfo(itemId, fields);
-        var lineItems = RepositoryItemLineItemsParser.TryParse(
+        var lineItems = RepositoryItemLineItemsParser.TryParseArray(
+            GetString(fields, "InvoiceExtractedLineItem"),
+            GetLineItemsFieldBySuffix(fields, "ExtractedLineItem"),
+            GetLineItemsFieldBySuffix(fields, "LineItem"),
             GetString(fields, "SummaryJson"),
-            GetString(fields, "OcrJson"),
-            currency);
+            GetString(fields, "OcrJson"));
 
         var detailsRow = new[]
         {
@@ -110,6 +112,23 @@ internal static class RepositoryItemWorkspaceBuilder
             storageProviderCode,
             detailsRow,
             lineItems);
+    }
+
+    /// <summary>Find first field whose column name ends with the suffix and looks like JSON line items.</summary>
+    private static string? GetLineItemsFieldBySuffix(IReadOnlyDictionary<string, object?> fields, string suffix)
+    {
+        foreach (var (key, value) in fields)
+        {
+            if (value == null)
+                continue;
+            if (!key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var text = value.ToString();
+            if (!string.IsNullOrWhiteSpace(text) && text.TrimStart().StartsWith('['))
+                return text;
+        }
+
+        return null;
     }
 
     private static RepositoryItemPanelSectionDto BuildDocumentInfo(
@@ -202,7 +221,12 @@ internal static class RepositoryItemWorkspaceBuilder
         HiddenColumns.Contains(column) ||
         DocumentInfoColumns.Contains(column) ||
         AiAnalysisColumns.Contains(column) ||
-        SystemInfoColumns.Contains(column);
+        SystemInfoColumns.Contains(column) ||
+        IsLineItemsColumn(column);
+
+    private static bool IsLineItemsColumn(string column) =>
+        column.Contains("LineItem", StringComparison.OrdinalIgnoreCase) ||
+        column.Contains("Line_Item", StringComparison.OrdinalIgnoreCase);
 
     private static RepositoryItemPanelSectionDto BuildAiAnalysis(IReadOnlyDictionary<string, object?> fields)
     {
