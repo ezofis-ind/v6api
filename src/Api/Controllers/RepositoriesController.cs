@@ -217,8 +217,8 @@ public sealed class RepositoriesController : ControllerBase
     }
 
     /// <summary>
-    /// Bottom file list (paged). filters = JSON scope (same as browse parentFilters).
-    /// Fast bulk: pageSize up to 500, skipTotal=true, cursor from response nextCursor for infinite scroll.
+    /// Bottom file list (paged). Prefer <c>POST .../items/query</c> for multi-value filters
+    /// (JSON arrays in GET query strings are often corrupted by spaces/encoding).
     /// </summary>
     [HttpGet("/api/repositories/{id:guid}/items")]
     public async Task<IActionResult> ListItems(Guid id, [FromQuery] RepositoryItemListQuery query, CancellationToken cancellationToken)
@@ -226,6 +226,41 @@ public sealed class RepositoriesController : ControllerBase
         var tenantId = RequireTenantId();
         try
         {
+            var normalized = NormalizeItemListQuery(query);
+            var result = await _items.ListItemsAsync(id, tenantId, normalized, cancellationToken);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Same as GET items, but filters are in the JSON body (recommended for multi-select).
+    /// Sample body:
+    /// <code>
+    /// {
+    ///   "filters": { "Supplier": ["CHAMPION INDUSTRIAL SUPPLY", "Gerrie Logistics Services Ltd"] },
+    ///   "page": 1,
+    ///   "pageSize": 50
+    /// }
+    /// </code>
+    /// </summary>
+    [HttpPost("/api/repositories/{id:guid}/items/query")]
+    public async Task<IActionResult> QueryItems(
+        Guid id,
+        [FromBody] RepositoryItemQueryRequest request,
+        CancellationToken cancellationToken)
+    {
+        var tenantId = RequireTenantId();
+        try
+        {
+            var query = ToItemListQuery(request);
             var result = await _items.ListItemsAsync(id, tenantId, query, cancellationToken);
             return Ok(result);
         }
@@ -665,6 +700,63 @@ public sealed class RepositoriesController : ControllerBase
         throw new ArgumentException("Request body must be a JSON object, e.g. {\"Supplier\":\"Acme\",\"InvoiceNumber\":\"INV-1\"}.");
     }
 
+    private static RepositoryItemListQuery NormalizeItemListQuery(RepositoryItemListQuery query)
+    {
+        if (string.IsNullOrWhiteSpace(query.Filters))
+            return query;
+
+        var filters = query.Filters.Trim();
+        // Query-string clients sometimes send still-encoded JSON.
+        if (filters.Contains('%', StringComparison.Ordinal))
+        {
+            try
+            {
+                filters = Uri.UnescapeDataString(filters);
+            }
+            catch (UriFormatException)
+            {
+                // keep original
+            }
+        }
+
+        return new RepositoryItemListQuery
+        {
+            Filters = filters,
+            Search = query.Search,
+            DateFrom = query.DateFrom,
+            DateTo = query.DateTo,
+            SortBy = query.SortBy,
+            SortOrder = query.SortOrder,
+            Page = query.Page,
+            PageSize = query.PageSize,
+            SkipTotal = query.SkipTotal,
+            Cursor = query.Cursor
+        };
+    }
+
+    private static RepositoryItemListQuery ToItemListQuery(RepositoryItemQueryRequest request)
+    {
+        string? filtersJson = null;
+        if (request.Filters is { } filters && filters.ValueKind == JsonValueKind.Object)
+            filtersJson = filters.GetRawText();
+        else if (!string.IsNullOrWhiteSpace(request.FiltersJson))
+            filtersJson = request.FiltersJson;
+
+        return new RepositoryItemListQuery
+        {
+            Filters = filtersJson,
+            Search = request.Search,
+            DateFrom = request.DateFrom,
+            DateTo = request.DateTo,
+            SortBy = request.SortBy ?? "documentDate",
+            SortOrder = request.SortOrder ?? "desc",
+            Page = request.Page <= 0 ? 1 : request.Page,
+            PageSize = request.PageSize <= 0 ? 50 : request.PageSize,
+            SkipTotal = request.SkipTotal,
+            Cursor = request.Cursor
+        };
+    }
+
     private static IReadOnlyDictionary<string, string> ParseParentFilters(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -747,4 +839,24 @@ public sealed class RepositoriesController : ControllerBase
         User.FindFirstValue("email")
         ?? User.FindFirstValue(ClaimTypes.Email)
         ?? User.FindFirstValue("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress");
+}
+
+/// <summary>POST body for <c>/api/repositories/{id}/items/query</c> (multi-value filters safe).</summary>
+public sealed class RepositoryItemQueryRequest
+{
+    /// <summary>JSON object, e.g. <c>{ "Supplier": ["A", "B"], "Status": "Verifier" }</c>.</summary>
+    public JsonElement? Filters { get; init; }
+
+    /// <summary>Optional alternate to <see cref="Filters"/> when sending filters as a JSON string.</summary>
+    public string? FiltersJson { get; init; }
+
+    public string? Search { get; init; }
+    public DateTime? DateFrom { get; init; }
+    public DateTime? DateTo { get; init; }
+    public string? SortBy { get; init; }
+    public string? SortOrder { get; init; }
+    public int Page { get; init; } = 1;
+    public int PageSize { get; init; } = 50;
+    public bool SkipTotal { get; init; }
+    public string? Cursor { get; init; }
 }

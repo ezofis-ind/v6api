@@ -79,13 +79,6 @@ public sealed class BuiltinRoleProvisioning : IBuiltinRoleProvisioning
         string description,
         CancellationToken cancellationToken)
     {
-        var existing = await context.Roles
-            .Include(r => r.Permissions)
-            .FirstOrDefaultAsync(r => r.Name == roleName, cancellationToken);
-
-        if (existing != null)
-            return existing;
-
         var categoryKeys = await context.PermissionCategories
             .AsNoTracking()
             .Where(c => c.IsActive)
@@ -94,12 +87,38 @@ public sealed class BuiltinRoleProvisioning : IBuiltinRoleProvisioning
             .Select(c => c.Key)
             .ToListAsync(cancellationToken);
 
+        var existing = await context.Roles
+            .Include(r => r.Permissions)
+            .FirstOrDefaultAsync(r => r.Name == roleName, cancellationToken);
+
+        if (existing != null)
+        {
+            // Backfill: Admin/TenantUser were only granted categories present at first create.
+            // New categories (or empty create) left some options as Visible:false in the UI.
+            EnsureAllCategoryPermissions(existing, categoryKeys);
+            return existing;
+        }
+
         var role = Role.Create(tenantId, roleName, description);
         if (categoryKeys.Count > 0)
             role.AssignPermissions(categoryKeys);
 
         await context.Roles.AddAsync(role, cancellationToken);
         return role;
+    }
+
+    /// <summary>Grant any missing active permission categories onto a builtin role (does not remove existing).</summary>
+    private static void EnsureAllCategoryPermissions(Role role, IReadOnlyList<string> categoryKeys)
+    {
+        if (categoryKeys.Count == 0)
+            return;
+
+        var existing = new HashSet<string>(
+            role.Permissions.Select(p => p.PermissionKey),
+            StringComparer.OrdinalIgnoreCase);
+        var missing = categoryKeys.Where(k => !existing.Contains(k)).ToList();
+        if (missing.Count > 0)
+            role.AssignPermissions(missing);
     }
 
     private static async Task SyncAllMembershipsAsync(

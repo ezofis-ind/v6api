@@ -332,11 +332,25 @@ app.MapHealthChecks("/health");
 if (hangfireEnabled)
 {
     app.MapHangfireDashboard("/hangfire");
-    RecurringJob.AddOrUpdate<RunEmailIngestPollJob>(
-        "email-ingest-poll",
-        job => job.Execute(null),
-        Cron.Minutely);
-    Log.Information("Registered Hangfire recurring job email-ingest-poll (every minute; per-mailbox interval still applies)");
+
+    var emailIngestHangfire = app.Configuration.GetValue("EmailIngest:HangfireEnabled", true);
+    if (emailIngestHangfire)
+    {
+        var cron = app.Configuration.GetValue("EmailIngest:HangfireCron", "*/5 * * * *")
+                   ?? "*/5 * * * *";
+        RecurringJob.AddOrUpdate<RunEmailIngestPollJob>(
+            "email-ingest-poll",
+            job => job.Execute(null),
+            cron);
+        Log.Information(
+            "Registered Hangfire email-ingest-poll cron={Cron} (only tenants with enabled mailboxes)",
+            cron);
+    }
+    else
+    {
+        RecurringJob.RemoveIfExists("email-ingest-poll");
+        Log.Information("Email ingest Hangfire job disabled (EmailIngest:HangfireEnabled=false)");
+    }
 }
 
 try

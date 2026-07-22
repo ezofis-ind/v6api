@@ -17,7 +17,7 @@ internal static class ApDashboardBuilder
   {
     var periodLabel = BuildPeriodLabel(request.Period, rangeStartUtc, rangeEndUtc);
     var header = BuildHeader(currentInvoices, request, periodLabel);
-    var kpis = BuildKpis(currentInvoices, previousInvoices);
+    var kpis = BuildKpis(request.Period, currentInvoices, previousInvoices);
     var riskRadar = BuildSupplierRiskRadar(currentInvoices);
     var profitVsAp = BuildProfitVsAp(currentInvoices);
     var monthlyTrend = BuildMonthlyPaymentTrend(currentInvoices);
@@ -208,28 +208,31 @@ internal static class ApDashboardBuilder
   };
 
   private static IReadOnlyList<ApDashboardKpiDto> BuildKpis(
+    ApDashboardPeriod period,
     IReadOnlyList<ApDashboardInvoiceDto> current,
     IReadOnlyList<ApDashboardInvoiceDto> previous)
   {
+    var vsLabel = ComparisonPeriodSuffix(period);
     return
     [
-      BuildKpi("total_outstanding", "Total Outstanding", current, previous,
+      BuildKpi("total_outstanding", "Total Outstanding", vsLabel, current, previous,
         i => !IsPaid(i.PaymentStatus), i => i.Amount),
-      BuildKpi("total_paid", "Total Paid", current, previous,
+      BuildKpi("total_paid", "Total Paid", vsLabel, current, previous,
         i => IsPaid(i.PaymentStatus), i => i.Amount),
-      BuildKpi("pending_payments", "Pending Payments", current, previous,
+      BuildKpi("pending_payments", "Pending Payments", vsLabel, current, previous,
         i => string.Equals(i.PaymentStatus, "pending", StringComparison.OrdinalIgnoreCase), i => i.Amount),
-      BuildKpi("due_today", "Due Today", current, previous,
+      BuildKpi("due_today", "Due Today", vsLabel, current, previous,
         i => string.Equals(i.PaymentStatus, "due_today", StringComparison.OrdinalIgnoreCase), i => i.Amount),
-      BuildKpi("overdue_amount", "Overdue", current, previous,
+      BuildKpi("overdue_amount", "Overdue", vsLabel, current, previous,
         i => string.Equals(i.PaymentStatus, "overdue", StringComparison.OrdinalIgnoreCase), i => i.Amount),
-      BuildAvgProcessingKpi(current, previous)
+      BuildAvgProcessingKpi(vsLabel, current, previous)
     ];
   }
 
   private static ApDashboardKpiDto BuildKpi(
     string key,
     string label,
+    string vsLabel,
     IReadOnlyList<ApDashboardInvoiceDto> current,
     IReadOnlyList<ApDashboardInvoiceDto> previous,
     Func<ApDashboardInvoiceDto, bool> filter,
@@ -238,39 +241,56 @@ internal static class ApDashboardBuilder
     var value = current.Where(filter).Sum(selector);
     var prev = previous.Where(filter).Sum(selector);
     var change = ComputeChangePercent(value, prev);
+    var invertGood = key is "overdue_amount" or "pending_payments" or "total_outstanding";
+    var trend = TrendFromChange(change, value, prev, invertGood);
+    var (changeDirection, changeLabel, periodLabel, fullLabel) =
+      BuildComparisonParts(change, value, prev, vsLabel);
     return new ApDashboardKpiDto(
       key,
       label,
       FormatMoney(value),
       value,
       change,
-      TrendFromChange(change, invertGood: key is "overdue_amount" or "pending_payments" or "total_outstanding"));
+      trend,
+      fullLabel,
+      prev,
+      changeDirection,
+      changeLabel,
+      periodLabel);
   }
 
   private static ApDashboardKpiDto BuildAvgProcessingKpi(
+    string vsLabel,
     IReadOnlyList<ApDashboardInvoiceDto> current,
     IReadOnlyList<ApDashboardInvoiceDto> previous)
   {
-    var value = current
-      .Where(i => i.ProcessingDays.HasValue)
+    var currentDays = current
+      .Where(i => i.ProcessingDays is > 0)
       .Select(i => i.ProcessingDays!.Value)
-      .DefaultIfEmpty(0)
-      .Average();
-
-    var prev = previous
-      .Where(i => i.ProcessingDays.HasValue)
+      .ToList();
+    var previousDays = previous
+      .Where(i => i.ProcessingDays is > 0)
       .Select(i => i.ProcessingDays!.Value)
-      .DefaultIfEmpty(0)
-      .Average();
+      .ToList();
 
-    var change = ComputeChangePercent((decimal)value, (decimal)prev);
+    var value = currentDays.Count == 0 ? 0m : (decimal)currentDays.Average();
+    var prev = previousDays.Count == 0 ? 0m : (decimal)previousDays.Average();
+    var change = ComputeChangePercent(value, prev);
+    var trend = TrendFromChange(change, value, prev, invertGood: true);
+    var (changeDirection, changeLabel, periodLabel, fullLabel) =
+      BuildComparisonParts(change, value, prev, vsLabel);
     return new ApDashboardKpiDto(
       "avg_processing_time",
       "Avg. Processing Time",
       $"{value:0.0} d",
-      (decimal)value,
+      value,
       change,
-      TrendFromChange(change, invertGood: true));
+      trend,
+      fullLabel,
+      prev,
+      changeDirection,
+      changeLabel,
+      periodLabel);
   }
 
   private static ApDashboardSeriesDto BuildProfitVsAp(IReadOnlyList<ApDashboardInvoiceDto> invoices)
@@ -422,20 +442,72 @@ internal static class ApDashboardBuilder
 
   private static decimal? ComputeChangePercent(decimal current, decimal previous)
   {
+    // Both empty → 0% (flat).
+    if (previous == 0 && current == 0)
+      return 0;
+
+    // No baseline in previous period but activity now → treat as full increase.
     if (previous == 0)
-      return current == 0 ? 0 : null;
+      return 100m;
+
     return Math.Round((current - previous) * 100m / previous, 1);
   }
 
-  private static string? TrendFromChange(decimal? change, bool invertGood)
+  private static string TrendFromChange(
+    decimal? change,
+    decimal current,
+    decimal previous,
+    bool invertGood)
   {
-    if (change is null or 0)
+    if (change is null)
+      return current > previous
+        ? (invertGood ? "down" : "up")
+        : current < previous
+          ? (invertGood ? "up" : "down")
+          : "flat";
+
+    if (change == 0)
       return "flat";
+
     var up = change > 0;
     if (invertGood)
       up = !up;
     return up ? "up" : "down";
   }
+
+  private static (string ChangeDirection, string ChangeLabel, string PeriodLabel, string FullLabel)
+    BuildComparisonParts(
+      decimal? changePercent,
+      decimal current,
+      decimal previous,
+      string vsLabel)
+  {
+    var periodLabel = vsLabel;
+
+    if ((previous == 0 && current == 0) || changePercent is null or 0)
+    {
+      const string flat = "Flat";
+      return ("flat", flat, periodLabel, $"{flat} {periodLabel}");
+    }
+
+    var direction = changePercent > 0 ? "up" : "down";
+    var pct = Math.Abs(changePercent.Value).ToString("0.#", CultureInfo.InvariantCulture);
+    var changeLabel = $"{pct}% {direction}";
+    return (direction, changeLabel, periodLabel, $"{changeLabel} {periodLabel}");
+  }
+
+  private static string ComparisonPeriodSuffix(ApDashboardPeriod period) =>
+    period switch
+    {
+      ApDashboardPeriod.Today => "vs yesterday",
+      ApDashboardPeriod.Tomorrow => "vs today",
+      ApDashboardPeriod.ThisWeek => "vs last week",
+      ApDashboardPeriod.LastMonth => "vs prior month",
+      ApDashboardPeriod.ThisQuarter => "vs last quarter",
+      ApDashboardPeriod.ThisYear => "vs last year",
+      ApDashboardPeriod.Custom => "vs prior period",
+      _ => "vs last month"
+    };
 
   private static bool IsPaid(string status) =>
     string.Equals(status, "paid", StringComparison.OrdinalIgnoreCase)
@@ -454,13 +526,5 @@ internal static class ApDashboardBuilder
   private static string NormalizeCountry(string? code) =>
     string.IsNullOrWhiteSpace(code) ? "UN" : code.Trim().ToUpperInvariant();
 
-  private static string CountryName(string code) => code switch
-  {
-    "US" => "United States",
-    "DE" => "Germany",
-    "IN" => "India",
-    "GB" => "United Kingdom",
-    "UN" => "Unknown",
-    _ => code
-  };
+  private static string CountryName(string code) => ApCountryCatalog.DisplayName(code);
 }

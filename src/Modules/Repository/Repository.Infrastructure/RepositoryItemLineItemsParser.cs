@@ -1,58 +1,65 @@
-using System.Globalization;
 using System.Text.Json;
-using SaaSApp.Repository.Application.Contracts;
+using System.Text.Json.Nodes;
 
 namespace SaaSApp.Repository.Infrastructure;
 
 internal static class RepositoryItemLineItemsParser
 {
-    public static RepositoryItemLineItemsSectionDto? TryParse(string? summaryJson, string? ocrJson, string? currency)
+    /// <summary>
+    /// Returns the invoice line-item JSON array as <see cref="JsonElement"/> (no rows/grandTotal wrapper).
+    /// Prefers Invoice Extracted Line Item / similar fields, then SummaryJson / OcrJson.
+    /// </summary>
+    public static JsonElement? TryParseArray(params string?[] jsonSources)
     {
-        if (!string.IsNullOrWhiteSpace(summaryJson) && TryParseJson(summaryJson, currency, out var fromSummary))
-            return fromSummary;
+        foreach (var json in jsonSources)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+                continue;
 
-        if (!string.IsNullOrWhiteSpace(ocrJson) && TryParseJson(ocrJson, currency, out var fromOcr))
-            return fromOcr;
+            if (TryExtractArrayJson(json, out var arrayJson) && !string.IsNullOrWhiteSpace(arrayJson))
+            {
+                using var doc = JsonDocument.Parse(arrayJson);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0)
+                    return doc.RootElement.Clone();
+            }
+        }
 
         return null;
     }
 
-    private static bool TryParseJson(string json, string? currency, out RepositoryItemLineItemsSectionDto? section)
+    private static bool TryExtractArrayJson(string json, out string? arrayJson)
     {
-        section = null;
+        arrayJson = null;
         try
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return false;
-
-            if (!TryGetLineItemsArray(root, out var itemsElement))
-                return false;
-
-            var rows = new List<RepositoryItemLineItemRowDto>();
-            foreach (var item in itemsElement.EnumerateArray())
+            var node = JsonNode.Parse(json);
+            if (node is JsonArray rootArray && rootArray.Count > 0)
             {
-                if (item.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                rows.Add(new RepositoryItemLineItemRowDto(
-                    ReadString(item, "description", "Description", "itemDescription", "name"),
-                    ReadDecimal(item, "qty", "quantity", "Qty", "Quantity"),
-                    ReadDecimal(item, "unitPrice", "unit_price", "UnitPrice", "rate", "price"),
-                    ReadDecimal(item, "gst", "tax", "GST", "gstAmount", "taxAmount"),
-                    ReadDecimal(item, "total", "lineTotal", "amount", "Total")));
+                arrayJson = rootArray.ToJsonString();
+                return true;
             }
 
-            if (rows.Count == 0)
+            if (node is not JsonObject rootObj)
                 return false;
 
-            var grandTotal = ReadDecimal(root, "grandTotal", "grand_total", "GrandTotal", "totalAmount", "invoiceTotal");
-            if (grandTotal == null)
-                grandTotal = rows.Sum(r => r.Total ?? 0);
+            foreach (var name in new[]
+                     {
+                         "lineItems", "line_items", "LineItems", "items", "invoiceLines",
+                         "InvoiceExtractedLineItem", "invoiceExtractedLineItem",
+                         "POLineItem", "PoLineItem", "po_line_item"
+                     })
+            {
+                if (TryTakeArray(rootObj[name], out arrayJson))
+                    return true;
+            }
 
-            section = new RepositoryItemLineItemsSectionDto(rows, grandTotal, currency);
-            return true;
+            foreach (var prop in rootObj)
+            {
+                if (TryTakeArray(prop.Value, out arrayJson))
+                    return true;
+            }
+
+            return false;
         }
         catch (JsonException)
         {
@@ -60,51 +67,34 @@ internal static class RepositoryItemLineItemsParser
         }
     }
 
-    private static bool TryGetLineItemsArray(JsonElement root, out JsonElement array)
+    private static bool TryTakeArray(JsonNode? node, out string? arrayJson)
     {
-        foreach (var name in new[] { "lineItems", "line_items", "LineItems", "items", "invoiceLines" })
+        arrayJson = null;
+        if (node is JsonArray arr && arr.Count > 0)
         {
-            if (root.TryGetProperty(name, out array) && array.ValueKind == JsonValueKind.Array)
-                return true;
+            arrayJson = arr.ToJsonString();
+            return true;
         }
 
-        array = default;
-        return false;
-    }
-
-    private static string? ReadString(JsonElement obj, params string[] names)
-    {
-        foreach (var name in names)
+        if (node is JsonValue v &&
+            v.TryGetValue<string>(out var text) &&
+            !string.IsNullOrWhiteSpace(text) &&
+            text.TrimStart().StartsWith('['))
         {
-            if (!obj.TryGetProperty(name, out var prop))
-                continue;
-
-            return prop.ValueKind switch
+            try
             {
-                JsonValueKind.String => prop.GetString(),
-                JsonValueKind.Number => prop.GetRawText(),
-                _ => null
-            };
+                if (JsonNode.Parse(text) is JsonArray inner && inner.Count > 0)
+                {
+                    arrayJson = inner.ToJsonString();
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
         }
 
-        return null;
-    }
-
-    private static decimal? ReadDecimal(JsonElement obj, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!obj.TryGetProperty(name, out var prop))
-                continue;
-
-            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetDecimal(out var num))
-                return num;
-
-            if (prop.ValueKind == JsonValueKind.String &&
-                decimal.TryParse(prop.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
-                return parsed;
-        }
-
-        return null;
+        return false;
     }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
@@ -93,6 +94,10 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
                 ? EmailIngestMasterSources.QuickBooks
                 : EmailIngestMasterSources.InternalForm);
 
+        var masterFormId = options?.MasterFormId
+            ?? existing?.MasterFormId
+            ?? ResolveMasterFormIdFromWorkflow(json);
+
         var upsert = new EmailIngestMailboxUpsertRequest(
             ConnectorId: connectorId.Value,
             WorkflowId: workflowId,
@@ -102,26 +107,16 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
                 ?? 5,
             QueryFilter: options?.EmailQueryFilter ?? existing?.QueryFilter,
             MasterSource: masterSource,
-            MasterFormId: options?.MasterFormId ?? existing?.MasterFormId,
+            MasterFormId: masterFormId,
             MasterConnectorId: options?.MasterConnectorId ?? existing?.MasterConnectorId,
             AttachmentExtensions: existing?.AttachmentExtensions);
 
-        // InternalForm requires masterFormId — if missing, default to a placeholder only when switching
-        // from QuickBooks is not the case; validate via Create/Update which throws.
         if (string.Equals(upsert.MasterSource, EmailIngestMasterSources.InternalForm, StringComparison.OrdinalIgnoreCase)
             && string.IsNullOrWhiteSpace(upsert.MasterFormId))
         {
-            // Allow link without master form: use empty-safe path by setting QuickBooks-free InternalForm
-            // only when master form is provided; otherwise keep prior or require caller to set form.
-            if (existing != null && !string.IsNullOrWhiteSpace(existing.MasterFormId))
-            {
-                upsert = upsert with { MasterFormId = existing.MasterFormId };
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    "masterFormId is required when masterSource is InternalForm (set on create/update with emailConnectorId).");
-            }
+            _logger.LogWarning(
+                "Email ingest mailbox for workflow {WorkflowId} has no masterFormId; mail will still be polled, but master resolve may fail until masterFormId is set.",
+                workflowId);
         }
 
         EmailIngestMailboxDto mailbox;
@@ -132,7 +127,32 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
 
         await PersistConnectorIdInWorkflowJsonAsync(workflowId, json, workflowJsonRaw, connectorId.Value, cancellationToken);
 
+        _logger.LogInformation(
+            "Linked email ingest mailbox {MailboxId} workflow {WorkflowId} connector {ConnectorId} enabled={Enabled}",
+            mailbox.Id,
+            workflowId,
+            mailbox.ConnectorId,
+            mailbox.IsEnabled);
+
         return new WorkflowEmailIngestLinkResult(mailbox.Id, mailbox.ConnectorId, mailbox.IsEnabled);
+    }
+
+    private static string? ResolveMasterFormIdFromWorkflow(WorkflowJsonDto? json)
+    {
+        if (json?.MasterFormIds is { Length: > 0 })
+        {
+            var first = json.MasterFormIds.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+            if (!string.IsNullOrWhiteSpace(first))
+                return first.Trim();
+        }
+
+        var formId = json?.Settings?.General?.InitiateUsing?.FormId;
+        if (formId?.Guid is Guid g && g != Guid.Empty)
+            return g.ToString("D");
+        if (formId?.LegacyInt is int legacy)
+            return legacy.ToString(CultureInfo.InvariantCulture);
+
+        return null;
     }
 
     private async Task PersistConnectorIdInWorkflowJsonAsync(

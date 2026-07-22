@@ -61,6 +61,42 @@ internal static class RepositoryItemWorkflowStatusEnricher
         return map.TryGetValue(workflowInstanceId, out var status) ? status : null;
     }
 
+    /// <summary>
+    /// Instance IDs whose <em>display</em> status (same as list enrichment) matches any of
+    /// <paramref name="displayStatuses"/> (case-insensitive).
+    /// </summary>
+    public static async Task<IReadOnlyList<Guid>> FindInstanceIdsWithDisplayStatusAsync(
+        SqlConnection connection,
+        IReadOnlyList<Guid> candidateInstanceIds,
+        IReadOnlyList<string> displayStatuses,
+        CancellationToken cancellationToken)
+    {
+        var wanted = new HashSet<string>(
+            displayStatuses
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+        if (wanted.Count == 0 || candidateInstanceIds.Count == 0)
+            return Array.Empty<Guid>();
+
+        var statusByInstance = await ResolveStatusesAsync(connection, candidateInstanceIds, cancellationToken);
+        if (statusByInstance.Count == 0)
+            return Array.Empty<Guid>();
+
+        return statusByInstance
+            .Where(kv => wanted.Contains(kv.Value))
+            .Select(kv => kv.Key)
+            .Distinct()
+            .ToList();
+    }
+
+    /// <summary>Display Status for each instance (same values as list enrichment).</summary>
+    public static Task<Dictionary<Guid, string>> GetDisplayStatusMapAsync(
+        SqlConnection connection,
+        IReadOnlyList<Guid> candidateInstanceIds,
+        CancellationToken cancellationToken) =>
+        ResolveStatusesAsync(connection, candidateInstanceIds, cancellationToken);
+
     private static async Task<Dictionary<Guid, string>> ResolveStatusesAsync(
         SqlConnection connection,
         IReadOnlyList<Guid> instanceIds,

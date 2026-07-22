@@ -134,7 +134,18 @@ public sealed record ApDashboardKpiDto(
   string DisplayValue,
   decimal Value,
   decimal? ChangePercent,
-  string? Trend);
+  /// <summary>Semantic arrow for UI color: up | down | flat (inverted for “bad” KPIs like overdue).</summary>
+  string? Trend,
+  /// <summary>Full footer, e.g. <c>36% up vs last month</c>, <c>48% down vs last month</c>, <c>Flat vs last month</c>.</summary>
+  string? ComparisonLabel = null,
+  /// <summary>Previous-period raw value used for the change (for UI tooltips).</summary>
+  decimal? PreviousValue = null,
+  /// <summary>Numeric MoM direction only: <c>up</c> | <c>down</c> | <c>flat</c> (not inverted).</summary>
+  string? ChangeDirection = null,
+  /// <summary>Change part only, e.g. <c>36% up</c>, <c>48% down</c>, <c>Flat</c>.</summary>
+  string? ComparisonChangeLabel = null,
+  /// <summary>Period part only, e.g. <c>vs last month</c>.</summary>
+  string? ComparisonPeriodLabel = null);
 
 public sealed record ApDashboardSeriesDto(
   string Title,

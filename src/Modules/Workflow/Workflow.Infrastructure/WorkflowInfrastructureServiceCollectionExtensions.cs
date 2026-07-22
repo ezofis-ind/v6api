@@ -107,6 +107,7 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IMasterFileImportPythonJobClient, MasterFileImportPythonJobClient>();
         services.AddScoped<RunMasterFileImportPythonJob>();
         services.Configure<ApAgentOptions>(configuration.GetSection(ApAgentOptions.SectionName));
+        services.Configure<EmailIngestOptions>(configuration.GetSection(EmailIngestOptions.SectionName));
         services.AddHttpClient(nameof(ApAgentPythonPipelineService), client =>
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
@@ -114,6 +115,12 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IApAgentPythonPipelineService, ApAgentPythonPipelineService>();
         services.AddScoped<IApAgentPythonJobClient, ApAgentPythonJobClient>();
         services.AddScoped<RunApAgentPythonJob>();
+
+        services.AddHttpClient(nameof(FieldMappingService), client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(2);
+        });
+        services.AddScoped<IFieldMappingService, FieldMappingService>();
 
         return services;
     }
