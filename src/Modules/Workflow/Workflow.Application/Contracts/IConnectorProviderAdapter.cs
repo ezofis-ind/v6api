@@ -111,4 +111,12 @@ public interface IConnectorProviderAdapter
         string documentId,
         string? extraConfigJson,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Return raw QBO PurchaseOrder JSON for DocNumber (PO Number), or null if not found.</summary>
+    Task<string?> GetQuickBooksPurchaseOrderRawByDocNumberAsync(
+        string accessToken,
+        string realmId,
+        string poNumber,
+        string? extraConfigJson,
+        CancellationToken cancellationToken = default);
 }

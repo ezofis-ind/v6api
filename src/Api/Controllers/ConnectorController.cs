@@ -449,6 +449,39 @@ public sealed class ConnectorController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Look up a QuickBooks Purchase Order by PO Number (DocNumber) for AP Agent invoice matching.
+    /// Returns header + line items + full QBO raw object.
+    /// </summary>
+    [HttpPost("{id:guid}/quickbooks/purchase-orders/lookup")]
+    [ProducesResponseType(typeof(ConnectorQuickBooksPoLookupResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> LookupQuickBooksPurchaseOrder(
+        Guid id,
+        [FromBody] ConnectorQuickBooksPoLookupRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (request is null || string.IsNullOrWhiteSpace(request.PoNumber))
+                return BadRequest(new { error = "poNumber is required." });
+
+            var result = await _oauthService.LookupQuickBooksPurchaseOrderAsync(id, request.PoNumber, cancellationToken);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     /// <summary>Download a QuickBooks document PDF (Invoice, Bill, PurchaseOrder, Estimate, SalesReceipt).</summary>
     [HttpGet("{id:guid}/quickbooks/documents/{documentId}/pdf")]
     [ProducesResponseType(StatusCodes.Status200OK)]

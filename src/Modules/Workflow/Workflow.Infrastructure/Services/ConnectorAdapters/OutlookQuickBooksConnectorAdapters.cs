@@ -466,6 +466,28 @@ internal sealed class QuickBooksConnectorAdapter : ConnectorProviderAdapterBase
         return (ms, "application/pdf", $"{type}-{documentId}.pdf");
     }
 
+    public override async Task<string?> GetQuickBooksPurchaseOrderRawByDocNumberAsync(
+        string accessToken,
+        string realmId,
+        string poNumber,
+        string? extraConfigJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(poNumber))
+            throw new ArgumentException("poNumber is required.");
+
+        var escaped = EscapeQboLiteral(poNumber.Trim());
+        // Exact DocNumber match (PO Number on PurchaseOrder).
+        var query = $"select * from PurchaseOrder where DocNumber = '{escaped}'";
+        var root = await QueryAsync(accessToken, realmId, query, extraConfigJson, cancellationToken);
+        if (!TryGetQueryArray(root, "PurchaseOrder", out var arr) || arr.GetArrayLength() == 0)
+            return null;
+
+        return arr[0].GetRawText();
+    }
+
+    private static string EscapeQboLiteral(string value) => value.Replace("'", "''", StringComparison.Ordinal);
+
     private async Task<JsonElement> QueryAsync(
         string accessToken,
         string realmId,

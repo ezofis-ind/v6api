@@ -142,6 +142,7 @@ QuickBooks (provider code `QUICKBOOKS`):
 
 - `GET /api/connector/{id}/quickbooks/masters?masterType=Customer|Vendor|Item`
 - `GET /api/connector/{id}/quickbooks/documents?documentType=Invoice|Bill|PurchaseOrder|Estimate|SalesReceipt`
+- `POST /api/connector/{id}/quickbooks/purchase-orders/lookup` — body `{ "poNumber": "1005" }` → full PO header + lines for AP Agent
 - `GET /api/connector/{id}/quickbooks/documents/{documentId}/pdf?documentType=Invoice`
 - Sandbox: set connector `configJson` to `{"environment":"sandbox"}`
 
