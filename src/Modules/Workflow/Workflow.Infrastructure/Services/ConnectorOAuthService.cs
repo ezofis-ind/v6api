@@ -387,6 +387,26 @@ public sealed class ConnectorOAuthService : IConnectorOAuthService
         return await adapter.DownloadQuickBooksDocumentPdfAsync(accessToken, realmId, documentType, documentId, configJson, cancellationToken);
     }
 
+    public async Task<ConnectorQuickBooksPoLookupResponse> LookupQuickBooksPurchaseOrderAsync(
+        Guid connectorId, string poNumber, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(poNumber))
+            throw new InvalidOperationException("poNumber is required.");
+
+        var normalized = poNumber.Trim();
+        var (adapter, accessToken, configJson, realmId) = await PrepareQuickBooksAsync(connectorId, cancellationToken);
+        var raw = await adapter.GetQuickBooksPurchaseOrderRawByDocNumberAsync(
+            accessToken, realmId, normalized, configJson, cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(raw))
+            return new ConnectorQuickBooksPoLookupResponse(false, normalized, null);
+
+        return new ConnectorQuickBooksPoLookupResponse(
+            true,
+            normalized,
+            QuickBooksPurchaseOrderMapper.FromRawJson(raw));
+    }
+
     private async Task<(IConnectorProviderAdapter Adapter, string AccessToken, string? ConfigJson)> PrepareOpsAsync(
         Guid connectorId, bool files, bool gmail, bool quickBooks, CancellationToken cancellationToken)
     {

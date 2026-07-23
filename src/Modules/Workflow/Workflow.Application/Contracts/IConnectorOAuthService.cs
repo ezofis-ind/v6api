@@ -90,4 +90,10 @@ public interface IConnectorOAuthService
         string documentType,
         string documentId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Look up full Purchase Order by PO Number (QBO DocNumber) for AP Agent invoice matching.</summary>
+    Task<ConnectorQuickBooksPoLookupResponse> LookupQuickBooksPurchaseOrderAsync(
+        Guid connectorId,
+        string poNumber,
+        CancellationToken cancellationToken = default);
 }

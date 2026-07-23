@@ -81,3 +81,39 @@ public sealed record ConnectorQuickBooksDocumentDto(
 
 public sealed record ConnectorQuickBooksDocumentListResponse(string Type, IReadOnlyList<ConnectorQuickBooksDocumentDto> Items);
 
+/// <summary>AP Agent payload: look up a QuickBooks Purchase Order by DocNumber (PO Number).</summary>
+public sealed record ConnectorQuickBooksPoLookupRequest(string PoNumber);
+
+public sealed record ConnectorQuickBooksPoLineDto(
+    string? LineId,
+    int? LineNum,
+    string? DetailType,
+    string? Description,
+    decimal? Amount,
+    string? ItemId,
+    string? ItemName,
+    decimal? Quantity,
+    decimal? UnitPrice,
+    string? AccountId,
+    string? AccountName);
+
+public sealed record ConnectorQuickBooksPurchaseOrderDto(
+    string Id,
+    string? DocNumber,
+    string? TxnDate,
+    string? DueDate,
+    string? VendorId,
+    string? VendorName,
+    decimal? TotalAmount,
+    string? Currency,
+    string? PoStatus,
+    string? EmailStatus,
+    string? Memo,
+    IReadOnlyList<ConnectorQuickBooksPoLineDto> Lines,
+    object? Raw);
+
+public sealed record ConnectorQuickBooksPoLookupResponse(
+    bool Found,
+    string PoNumber,
+    ConnectorQuickBooksPurchaseOrderDto? PurchaseOrder);
+

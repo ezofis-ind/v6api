@@ -116,6 +116,10 @@ internal abstract class ConnectorProviderAdapterBase : IConnectorProviderAdapter
         string accessToken, string realmId, string documentType, string documentId, string? extraConfigJson, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException($"{ProviderCode} does not support QuickBooks document download.");
 
+    public virtual Task<string?> GetQuickBooksPurchaseOrderRawByDocNumberAsync(
+        string accessToken, string realmId, string poNumber, string? extraConfigJson, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException($"{ProviderCode} does not support QuickBooks purchase order lookup.");
+
     protected HttpClient CreateClient() => _httpClientFactory.CreateClient(nameof(IConnectorProviderAdapter));
 
     protected async Task<ConnectorOAuthTokenResult> RequestTokenAsync(
