@@ -78,24 +78,32 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
             .ThenBy(f => f.OrderId ?? int.MaxValue)
             .ToList();
 
-        if (folderFieldDefs.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Archive upload requires at least one repository field with IncludeInFolderStructure = 1. " +
-                "Use POST /api/repositories/{id}/items/upload for the standard flat path.");
-        }
-
         RepositoryArchiveFileNameResolver.EnsureMandatoryNamingMetadata(repo.Fields, fieldValues);
 
-        var folderPath = await _folderService.ResolveOrCreateFolderPathAsync(
-            repositoryId,
-            tenantId,
-            fieldValues,
-            userId,
-            cancellationToken)
-            ?? throw new InvalidOperationException("Folder structure could not be resolved.");
+        Guid leafFolderId = Guid.Empty;
+        IReadOnlyList<string> folderNames;
+        string repositoryName;
 
-        var leafFolderId = folderPath.LeafFolderId == Guid.Empty ? (Guid?)null : folderPath.LeafFolderId;
+        if (folderFieldDefs.Count == 0)
+        {
+            // Repositories without folder-structure fields still archive under the repository root.
+            folderNames = Array.Empty<string>();
+            repositoryName = repo.Name;
+        }
+        else
+        {
+            var folderPath = await _folderService.ResolveOrCreateFolderPathAsync(
+                repositoryId,
+                tenantId,
+                fieldValues,
+                userId,
+                cancellationToken)
+                ?? throw new InvalidOperationException("Folder structure could not be resolved.");
+
+            leafFolderId = folderPath.LeafFolderId;
+            folderNames = folderPath.FolderNames;
+            repositoryName = folderPath.RepositoryName;
+        }
 
         var connectionString = _connectionProvider.ConnectionString
             ?? throw new InvalidOperationException("Tenant connection string not resolved.");
@@ -121,8 +129,8 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
         var versionedFileName = RepositoryFilePathHelper.ApplyVersionToFileName(baseFileName, fileVersion);
 
         var storageRelativePath = RepositoryFilePathHelper.BuildArchiveRelativePath(
-            folderPath.RepositoryName,
-            folderPath.FolderNames,
+            repositoryName,
+            folderNames,
             archiveBaseFileName,
             fileVersion);
 
@@ -194,9 +202,9 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
             relativePath,
             providerCode,
             fileVersion,
-            folderPath.LeafFolderId,
-            folderPath.FolderNames,
-            folderPath.RepositoryName,
+            leafFolderId,
+            folderNames,
+            repositoryName,
             workflowAttached,
             request.WorkflowId,
             request.ProcessId,
