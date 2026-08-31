@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using SaaSApp.MultiTenancy;
+using SaaSApp.Repository.Application;
 using SaaSApp.Repository.Application.Contracts;
 using SaaSApp.Repository.Infrastructure.Storage;
 
@@ -42,6 +43,13 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
 
         if (string.IsNullOrWhiteSpace(request.FileName))
             throw new ArgumentException("File name is required.");
+
+        request = request with
+        {
+            FileName = RepositoryFileNameHelper.EnsureExtension(
+                request.FileName,
+                request.ContentType)
+        };
 
         var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
             ?? throw new InvalidOperationException("Repository not found.");
@@ -97,6 +105,7 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
                 tenantId,
                 fieldValues,
                 userId,
+                request.AllowIncompleteFolderMetadata,
                 cancellationToken)
                 ?? throw new InvalidOperationException("Folder structure could not be resolved.");
 
@@ -114,7 +123,8 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
         var archiveBaseFileName = RepositoryArchiveFileNameResolver.ResolveArchiveBaseFileName(
             repo.Fields,
             fieldValues,
-            request.FileName);
+            request.FileName,
+            request.ContentType);
 
         var baseFileName = RepositoryFilePathHelper.GetBaseFileName(archiveBaseFileName);
         var fileVersion = await RepositoryItemVersionResolver.ResolveNextFileVersionAsync(
@@ -172,7 +182,9 @@ public sealed class RepositoryArchiveFileUploadService : IRepositoryArchiveFileU
             leafFolderId,
             request.InstanceId,
             fieldValues,
-            fileVersion);
+            fileVersion,
+            request.OcrJson,
+            request.OcrText);
 
         await RepositoryItemInsertHelper.InsertItemAsync(
             connection, repo, tenantId, repositoryId, itemId, storageProviderId, createRequest, userId, cancellationToken);

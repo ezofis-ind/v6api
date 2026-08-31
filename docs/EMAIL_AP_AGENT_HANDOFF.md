@@ -12,6 +12,28 @@
 | `dbo.EmailIngestProcessed` | Dedup (message + attachment already started) |
 | Hangfire `email-ingest-poll` | Every minute; respects each mailbox `pollIntervalMinutes` |
 | Existing AP Agent | Multipart workflow start still enqueues Python AP Agent |
+| Normal workflow email | OCR → stage → form pre-fill → `stagedFiles` start (no AP Agent) |
+
+## Normal workflow email ingest
+
+When the linked workflow has **no** dedicated AP Agent step (`stageType: AP_AGENT` or step name `Ap Agent`), email ingest mirrors the manual UI flow in [`NORMAL_WORKFLOW_START_FRONTEND_GUIDE.md`](NORMAL_WORKFLOW_START_FRONTEND_GUIDE.md):
+
+1. Download attachment
+2. `uploadForOcr` — all repository fields sent to OCR API
+3. `uploadWithOcr` — file staged in monitor/stage table with OCR metadata
+4. Map OCR field names → form control `jsonIds`
+5. `StartWorkflow` with `formData` + `stagedFiles` (archive on start; lenient folder metadata when OCR is partial). After promote, archived **itemId** is written to the form FILE control (`jsonId` in `stagedFiles` for manual start; auto when the form has one FILE control — email ingest).
+
+**Requirements:** workflow `InitiateUsing` must include `repositoryId` + `formId`. Same mailbox setup as AP (`emailConnectorId` on workflow or `POST /api/email-ingest/mailboxes`).
+
+**AP vs normal (auto-detect):**
+
+| Workflow | Email ingest path |
+|----------|-------------------|
+| Has dedicated AP Agent step | Raw attachment + `TriggerApAgentPythonJob: true` (unchanged) |
+| Normal (no AP Agent step) | OCR → stage → formData + stagedFiles |
+
+Manual test: `POST /api/email-ingest/mailboxes/{id}/poll`
 
 ## UI setup
 
@@ -120,7 +142,9 @@ Do **not** store Google/Microsoft/Intuit tokens in Python — call V6 with tenan
 1. List unread INBOX (optional `queryFilter`).
 2. As soon as a message is claimed: **mark as read** + insert `EmailIngestProcessed` message sentinel (`__message_handled__`) so Hangfire never starts it again even if StartWorkflow fails.
 3. Prefer real invoice attachments (PDF/TIFF); skip signature/inline badge images. Attachment dedup uses stable `filename+size` (Outlook attachment ids are unstable).
-4. For each new attachment → claim attachment row → `StartWorkflow` + `TriggerApAgentPythonJob`.
+4. For each new attachment → claim attachment row → start workflow:
+   - **AP workflow:** `StartWorkflow` + `TriggerApAgentPythonJob`
+   - **Normal workflow:** OCR → stage → `formData` + `stagedFiles` → archive on start
 5. Context JSON includes `messageId`, `from`, `subject`, `masterSource`, etc.
 6. If mark-as-read fails (often missing `gmail.modify` / `Mail.ReadWrite`), error is written to `EmailIngestMailbox.LastError` and logged — **dedup still blocks re-start**. Re-authorize the mail connector.
 7. Already-handled unread messages: skip start, retry mark-as-read only.

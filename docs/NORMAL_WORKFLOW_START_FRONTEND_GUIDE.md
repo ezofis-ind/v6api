@@ -204,7 +204,7 @@ Example invoice controls:
 | `kvcYuknkDumkTenjvrVLj` | Invoice No | Mandatory |
 | `UtfgJy6Z0qyfRC5Bclf-c` | Supplier | |
 | `aWaiq3o4hlpb76l-bivmP` | PO Line Item | TABLE — array of child jsonIds |
-| `9l_i90JwGJV3WGDGv3dj6` | Invoice Upload | FILE — **not** in formData; use `stagedFiles` |
+| `9l_i90JwGJV3WGDGv3dj6` | Invoice Upload | FILE — pass `jsonId` in `stagedFiles`; API sets archived **itemId** after promote |
 
 ---
 
@@ -294,7 +294,8 @@ Content-Type: application/json
   "stagedFiles": [
     {
       "repositoryId": "ac40db26-306b-4d13-8aeb-f80a056d9a73",
-      "fileId": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+      "fileId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "jsonId": "9l_i90JwGJV3WGDGv3dj6"
     }
   ]
 }
@@ -303,7 +304,7 @@ Content-Type: application/json
 | Property | Required | Notes |
 |----------|----------|--------|
 | `formData` | No | Object keyed by **jsonId** (or field name) |
-| `stagedFiles` | No | `{ repositoryId, fileId }` from `uploadWithOcr` |
+| `stagedFiles` | No | `{ repositoryId, fileId, jsonId? }` from `uploadWithOcr`. After archive, API writes archived **itemId** into the FILE control column (`jsonId`). Omit `jsonId` when the form has a single FILE control (email ingest uses this auto path). |
 | `context` / `envType` | No | |
 | `attachment` | No | Legacy base64; prefer `stagedFiles` |
 
@@ -358,7 +359,8 @@ Content-Type: multipart/form-data
 1. Insert ezfb row; apply `formData`.
 2. Complete START with review `Submit`; open next step from `ActionsJson`.
 3. Promote each staged file → archive + attachments + `processAddon` (`ProcessId` = instance GUID).
-4. Link `processForm`; re-sync mailbox so Sent/Inbox show form + file.
+4. Write archived **itemId** into ezfb FILE control (`stagedFiles.jsonId`, or auto when form has one FILE control — email ingest).
+5. Link `processForm`; re-sync mailbox so Sent/Inbox show form + file.
 
 ---
 

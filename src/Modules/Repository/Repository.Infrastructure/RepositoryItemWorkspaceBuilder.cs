@@ -83,8 +83,8 @@ internal static class RepositoryItemWorkspaceBuilder
         var currency = GetString(fields, "Currency");
         var fileUrl = $"/api/repositories/{repositoryId:D}/items/{itemId:D}/file";
 
-        var documentInfo = BuildDocumentInfo(fields, currency);
-        var fieldDetails = BuildFieldDetails(repository.Fields, fields, currency);
+        var documentInfo = BuildDocumentInfo(repository.Name, fields, currency);
+        var fieldDetails = BuildFieldDetails(repository, repository.Fields, fields, currency);
         var aiAnalysis = BuildAiAnalysis(fields);
         var systemInfo = BuildSystemInfo(itemId, fields);
         // Only when the repository defines a line-item field (e.g. InvoiceExtractedLineItem).
@@ -147,6 +147,7 @@ internal static class RepositoryItemWorkspaceBuilder
     }
 
     private static RepositoryItemPanelSectionDto BuildDocumentInfo(
+        string? repositoryName,
         IReadOnlyDictionary<string, object?> fields,
         string? currency)
     {
@@ -173,7 +174,12 @@ internal static class RepositoryItemWorkspaceBuilder
                 panelFields.Add(new RepositoryItemPanelFieldDto(column, label, value));
         }
 
-        return new RepositoryItemPanelSectionDto("documentInfo", "Document Info", panelFields);
+        // Accounts Payable: upper panel is Supplier Info (same fields as Document Info elsewhere).
+        var (sectionKey, title) = IsAccountsPayableRepository(repositoryName)
+            ? ("supplierInfo", "Supplier Info")
+            : ("documentInfo", "Document Info");
+
+        return new RepositoryItemPanelSectionDto(sectionKey, title, panelFields);
     }
 
     /// <summary>
@@ -181,6 +187,7 @@ internal static class RepositoryItemWorkspaceBuilder
     /// sectionKey <c>details</c>; legacy FE may still accept <c>supplierDetails</c>.
     /// </summary>
     private static RepositoryItemPanelSectionDto BuildFieldDetails(
+        RepositoryDetailDto repository,
         IReadOnlyList<RepositoryFieldDto> repositoryFields,
         IReadOnlyDictionary<string, object?> fields,
         string? currency)
@@ -213,8 +220,31 @@ internal static class RepositoryItemWorkspaceBuilder
 
         AppendKnownFieldFallback(fields, panelFields, seen, currency);
 
-        // Generic title — repository fields (not AP-only "supplier").
-        return new RepositoryItemPanelSectionDto("documentDetails", "Document Details", panelFields);
+        var (sectionKey, title) = ResolveFieldDetailsSection(repository.Name);
+        return new RepositoryItemPanelSectionDto(sectionKey, title, panelFields);
+    }
+
+    /// <summary>
+    /// Accounts Payable: upper panel = Supplier Info; details panel = Supplier Details.
+    /// Other repositories: Document Info + Document Details.
+    /// </summary>
+    private static (string SectionKey, string Title) ResolveFieldDetailsSection(string? repositoryName)
+    {
+        if (IsAccountsPayableRepository(repositoryName))
+            return ("supplierDetails", "Supplier Details");
+
+        return ("documentDetails", "Document Details");
+    }
+
+    private static bool IsAccountsPayableRepository(string? repositoryName)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryName))
+            return false;
+
+        var name = repositoryName.Trim();
+        return name.Contains("Accounts Payable", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("Account Payable", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(name, "AP", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AppendKnownFieldFallback(

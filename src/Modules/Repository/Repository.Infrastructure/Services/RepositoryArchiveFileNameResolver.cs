@@ -64,18 +64,16 @@ internal static class RepositoryArchiveFileNameResolver
     public static string ResolveArchiveBaseFileName(
         IReadOnlyList<RepositoryFieldDto> allFields,
         IReadOnlyDictionary<string, string> metadata,
-        string originalFileName)
+        string originalFileName,
+        string? contentType = null)
     {
         var stem = ResolveArchiveFileStem(allFields, metadata);
-        var ext = Path.GetExtension(originalFileName);
-        if (string.IsNullOrEmpty(ext) || ext == ".")
-            ext = ".pdf";
-        else
-            ext = ext.ToLowerInvariant();
+        var ext = ResolvePreferredExtension(originalFileName, contentType);
 
         if (string.IsNullOrWhiteSpace(stem))
             return RepositoryFilePathHelper.EnsureFileNameHasExtension(
                 RepositoryFilePathHelper.GetBaseFileName(originalFileName),
+                contentType,
                 filePath: originalFileName);
 
         // Naming metadata is a stem (invoice/PO no.). Strip any accidental extension before appending.
@@ -86,26 +84,86 @@ internal static class RepositoryArchiveFileNameResolver
         if (string.IsNullOrWhiteSpace(stem))
             return RepositoryFilePathHelper.EnsureFileNameHasExtension(
                 RepositoryFilePathHelper.GetBaseFileName(originalFileName),
+                contentType,
                 filePath: originalFileName);
 
-        return RepositoryFilePathHelper.EnsureFileNameHasExtension($"{stem}{ext}", filePath: originalFileName);
+        return RepositoryFilePathHelper.EnsureFileNameHasExtension($"{stem}{ext}", contentType, filePath: originalFileName);
     }
 
+    private static string ResolvePreferredExtension(string originalFileName, string? contentType)
+    {
+        var fromName = Path.GetExtension(originalFileName);
+        var fromMime = ExtensionFromContentType(contentType);
+
+        if (!string.IsNullOrEmpty(fromMime))
+        {
+            if (string.IsNullOrEmpty(fromName) || fromName == ".")
+                return fromMime;
+
+            if (!ExtensionsMatch(fromName, fromMime))
+                return fromMime;
+        }
+
+        if (string.IsNullOrEmpty(fromName) || fromName == ".")
+            return ".pdf";
+
+        return fromName.ToLowerInvariant();
+    }
+
+    private static string? ExtensionFromContentType(string? contentType)
+    {
+        if (string.IsNullOrWhiteSpace(contentType))
+            return null;
+
+        var mime = contentType.Trim().Split(';')[0].Trim().ToLowerInvariant();
+        return mime switch
+        {
+            "application/pdf" => ".pdf",
+            "image/tiff" => ".tiff",
+            "image/tif" => ".tif",
+            "image/jpeg" or "image/jpg" => ".jpg",
+            "image/png" => ".png",
+            "application/msword" => ".doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+            "application/vnd.ms-excel" => ".xls",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
+            _ when mime.StartsWith("image/", StringComparison.Ordinal) => ".img",
+            _ => null
+        };
+    }
+
+    private static bool ExtensionsMatch(string? ext1, string? ext2)
+    {
+        if (string.IsNullOrEmpty(ext1) || string.IsNullOrEmpty(ext2))
+            return false;
+
+        var n1 = ext1.Trim().ToLowerInvariant() switch
+        {
+            ".jpeg" => ".jpg",
+            ".tif" => ".tiff",
+            _ => ext1.Trim().ToLowerInvariant()
+        };
+        var n2 = ext2.Trim().ToLowerInvariant() switch
+        {
+            ".jpeg" => ".jpg",
+            ".tif" => ".tiff",
+            _ => ext2.Trim().ToLowerInvariant()
+        };
+
+        return string.Equals(n1, n2, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Naming metadata is preferred for the archive file stem; if missing, callers fall back to the
+    /// original upload file name via <see cref="ResolveArchiveBaseFileName"/>. Do not throw here —
+    /// workflow start/promote often has incomplete repo metadata (form GUID keys ≠ repo fields).
+    /// </summary>
     public static void EnsureMandatoryNamingMetadata(
         IReadOnlyList<RepositoryFieldDto> allFields,
         IReadOnlyDictionary<string, string> metadata)
     {
-        var folderFields = RepositoryFolderStructureHelper.OrderFolderFields(
-            allFields.Where(f => f.IncludeInFolderStructure));
-        var namingField = ResolveNamingField(allFields, folderFields);
-        if (namingField == null || !namingField.IsMandatory)
-            return;
-
-        var stem = RepositoryFolderMetadataResolver.ResolveSegmentName(metadata, namingField);
-        if (!string.IsNullOrWhiteSpace(stem))
-            return;
-
-        throw new InvalidOperationException(
-            $"Archive file name requires metadata field '{namingField.Name}' (sql: {namingField.SqlColumnName}, level: {namingField.Level}).");
+        // Intentionally no-op: missing naming values are handled by ResolveArchiveBaseFileName fallback.
+        _ = allFields;
+        _ = metadata;
     }
 }

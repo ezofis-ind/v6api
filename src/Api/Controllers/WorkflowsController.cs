@@ -1183,7 +1183,13 @@ public sealed class WorkflowsController : ControllerBase
                 if (!TryReadGuid(item, "fileId", out var fileId) && !TryReadGuid(item, "FileId", out fileId))
                     continue;
                 if (repoId != Guid.Empty && fileId != Guid.Empty)
-                    list.Add(new StartWorkflowStagedFileRef(repoId, fileId));
+                {
+                    var formJsonId = ReadOptionalString(item, "formJsonId")
+                        ?? ReadOptionalString(item, "FormJsonId")
+                        ?? ReadOptionalString(item, "jsonId")
+                        ?? ReadOptionalString(item, "JsonId");
+                    list.Add(new StartWorkflowStagedFileRef(repoId, fileId, formJsonId));
+                }
             }
         }
 
@@ -1199,6 +1205,11 @@ public sealed class WorkflowsController : ControllerBase
             return true;
         return false;
     }
+
+    private static string? ReadOptionalString(JsonElement obj, string propertyName) =>
+        obj.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()?.Trim()
+            : null;
 
     private async Task<IActionResult> ExecuteStartAsync(
         Guid workflowId,
@@ -2528,6 +2539,7 @@ public sealed record WorkflowInboxFormData(
     int WFormId,
     int FormEntryId,
     string? FormId = null,
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(SaaSApp.Workflow.Application.Workflows.RawJsonStringConverter))]
     string? FieldsJson = null);
 public sealed record WorkflowInboxRepositoryData(int? RepositoryId, int? ItemId, string? FormJsonId);
 public sealed record WorkflowInboxItem(

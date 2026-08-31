@@ -338,9 +338,44 @@ public sealed class RepositoryItemQueryService : IRepositoryItemQueryService
         IDictionary<string, object?> fields,
         CancellationToken cancellationToken)
     {
+        if (fields.TryGetValue("CreatedByName", out var existingName)
+            && existingName != null
+            && !string.IsNullOrWhiteSpace(existingName.ToString()))
+        {
+            if (!fields.ContainsKey("CreatedByEmail")
+                && fields.TryGetValue("CreatedBy", out var createdByOnly)
+                && RepositoryUserNameResolver.TryParseUserId(createdByOnly, out var createdByOnlyId))
+            {
+                var connectionStringEarly = _connectionProvider.ConnectionString
+                    ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+                await using var connectionEarly = new SqlConnection(connectionStringEarly);
+                await connectionEarly.OpenAsync(cancellationToken);
+                var emailEarly = await RepositoryUserNameResolver.ResolveEmailAsync(
+                    connectionEarly,
+                    createdByOnlyId,
+                    cancellationToken);
+                if (!string.IsNullOrWhiteSpace(emailEarly))
+                    fields["CreatedByEmail"] = emailEarly;
+            }
+
+            return;
+        }
+
         if (!fields.TryGetValue("CreatedBy", out var createdByRaw)
             || !RepositoryUserNameResolver.TryParseUserId(createdByRaw, out var createdById))
         {
+            return;
+        }
+
+        if (createdById == Guid.Parse("00000000-0000-0000-0000-000000000001"))
+        {
+            if (fields.TryGetValue("CreatedByEmail", out var senderEmail)
+                && senderEmail != null
+                && !string.IsNullOrWhiteSpace(senderEmail.ToString()))
+            {
+                fields["CreatedByName"] = senderEmail.ToString()!.Trim();
+            }
+
             return;
         }
 

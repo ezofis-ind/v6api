@@ -477,6 +477,14 @@ public sealed class RepositorySecurityService : IRepositorySecurityService
         var principalIds = await ResolvePrincipalIdsAsync(tenantId, userId, cancellationToken);
         var docs = await GetDocumentSecurityAsync(repositoryId, tenantId, cancellationToken);
 
+        var isViewOrDownload =
+            string.Equals(permission, RepositorySecurityPermissions.View, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(permission, RepositorySecurityPermissions.Download, StringComparison.OrdinalIgnoreCase);
+
+        // Uploader can always see/download their own files (even when document grant allowlist would hide them).
+        if (isViewOrDownload && IsOwnedByUser(itemFields, userId))
+            return true;
+
         var hide = docs.Rules.Where(r =>
             string.Equals(r.Action, RepositorySecurityActions.Hide, StringComparison.OrdinalIgnoreCase)
             && PrincipalsMatch(r.UserIds, r.GroupIds, principalIds)
@@ -488,10 +496,24 @@ public sealed class RepositorySecurityService : IRepositorySecurityService
         var shareAccess = await GetShareRecipientAccessAsync(repositoryId, userId, cancellationToken);
         if (shareAccess != null)
         {
-            if (!string.Equals(permission, RepositorySecurityPermissions.View, StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(permission, RepositorySecurityPermissions.Download, StringComparison.OrdinalIgnoreCase))
+            if (!isViewOrDownload)
                 return false;
 
+            return docs.Rules.Any(r =>
+                string.Equals(r.Action, RepositorySecurityActions.Grant, StringComparison.OrdinalIgnoreCase)
+                && PrincipalsMatch(r.UserIds, r.GroupIds, principalIds)
+                && RuleMatchesItem(r, itemFields));
+        }
+
+        // Manual document grant rules are an allowlist — they restrict even when folder View is allowed.
+        var hasManualGrantRules = docs.Rules.Any(r =>
+            string.Equals(r.Action, RepositorySecurityActions.Grant, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(r.Source, "Share", StringComparison.OrdinalIgnoreCase)
+            && PrincipalsMatch(r.UserIds, r.GroupIds, principalIds)
+            && r.Conditions is { Count: > 0 });
+
+        if (hasManualGrantRules && isViewOrDownload)
+        {
             return docs.Rules.Any(r =>
                 string.Equals(r.Action, RepositorySecurityActions.Grant, StringComparison.OrdinalIgnoreCase)
                 && PrincipalsMatch(r.UserIds, r.GroupIds, principalIds)
@@ -507,13 +529,50 @@ public sealed class RepositorySecurityService : IRepositorySecurityService
         if (HasPermission(access.Permissions, permission))
             return true;
 
-        if (string.Equals(permission, RepositorySecurityPermissions.View, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(permission, RepositorySecurityPermissions.Download, StringComparison.OrdinalIgnoreCase))
+        if (isViewOrDownload)
         {
             return docs.Rules.Any(r =>
                 string.Equals(r.Action, RepositorySecurityActions.Grant, StringComparison.OrdinalIgnoreCase)
                 && PrincipalsMatch(r.UserIds, r.GroupIds, principalIds)
                 && RuleMatchesItem(r, itemFields));
+        }
+
+        return false;
+    }
+
+    private static bool IsOwnedByUser(IReadOnlyDictionary<string, string?> itemFields, Guid userId)
+    {
+        if (userId == Guid.Empty || itemFields.Count == 0)
+            return false;
+
+        var userIdText = userId.ToString("D");
+        foreach (var key in new[] { "CreatedBy", "CreatedById", "CreatedByUserId" })
+        {
+            if (!itemFields.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+                continue;
+
+            var value = raw.Trim();
+            if (string.Equals(value, userIdText, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (Guid.TryParse(value, out var parsed) && parsed == userId)
+                return true;
+        }
+
+        // Case-insensitive key fallback (dictionaries may use different casing without OrdinalIgnoreCase).
+        foreach (var kv in itemFields)
+        {
+            if (kv.Key is null || kv.Value is null)
+                continue;
+            if (!kv.Key.Equals("CreatedBy", StringComparison.OrdinalIgnoreCase)
+                && !kv.Key.Equals("CreatedById", StringComparison.OrdinalIgnoreCase)
+                && !kv.Key.Equals("CreatedByUserId", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = kv.Value.Trim();
+            if (string.Equals(value, userIdText, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (Guid.TryParse(value, out var parsed) && parsed == userId)
+                return true;
         }
 
         return false;

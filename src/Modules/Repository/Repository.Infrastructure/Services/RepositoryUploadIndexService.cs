@@ -56,12 +56,14 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
 
         await _provisioner.EnsureRepositoryTablesAsync(repositoryId, tenantId, cancellationToken);
 
+        fileName = RepositoryFilePathHelper.EnsureFileNameHasExtension(fileName, contentType);
+
         var storageProviderId = await _storageSeed.ResolveStorageProviderIdAsync(
             tenantId, repo.StorageProviderId, null, cancellationToken);
         var providers = await _storageSeed.ListProvidersAsync(tenantId, cancellationToken);
         var providerCode = providers.First(p => p.Id == storageProviderId).Code;
 
-        var relativePath = RepositoryFilePathHelper.BuildMonitorRelativePath(repositoryId, fileName);
+        var relativePath = RepositoryFilePathHelper.BuildMonitorRelativePath(repositoryId, fileName, contentType);
         var stageItemId = Guid.NewGuid();
 
         await _fileStorage.SaveAsync(
@@ -134,7 +136,7 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
             repositoryId,
             cancellationToken);
 
-        return new UploadForOcrResult(ocr.RawJson, ocr.OcrFieldList);
+        return new UploadForOcrResult(ocr.RawJson, ocr.OcrFieldList, ocr.OcrText);
     }
 
     public async Task<UploadWithOcrResult> UploadWithOcrAsync(
@@ -144,10 +146,9 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
         string fileName,
         string? contentType,
         long fileSize,
-        string? fieldsJson,
-        string? pageNo,
-        string? ocrType,
-        string? validateType,
+        string? metadataJson,
+        string? ocrJson,
+        string? ocrText,
         Guid? userId,
         CancellationToken cancellationToken = default)
     {
@@ -155,8 +156,6 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
         await fileStream.CopyToAsync(buffer, cancellationToken);
         buffer.Position = 0;
 
-        // fieldsJson here is an OCR hint list (name,TYPE), not pre-filled values.
-        // Stage first without values; OCR results are written to the stage row below.
         var upload = await UploadAsync(
             repositoryId,
             tenantId,
@@ -171,22 +170,24 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
         if (!Guid.TryParse(upload.FileId, out var stageId))
             throw new InvalidOperationException("Stage id was not returned from upload.");
 
-        buffer.Position = 0;
-        var ocr = await UploadForOcrAsync(
-            repositoryId,
-            tenantId,
-            buffer,
-            fieldsJson,
-            pageNo,
-            ocrType,
-            validateType,
-            fileName,
-            cancellationToken);
-
+        var parsed = ParseUploadWithOcrMetadata(metadataJson, ocrJson, ocrText);
         var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
             ?? throw new InvalidOperationException("Repository not found.");
 
-        var ocrFieldValues = ParseFieldsToDictionary(ocr.OcrFieldList);
+        // OCR does not return the archive naming field — use the original upload file name.
+        RepositoryNamingFieldMetadataInjector.InjectFromOriginalFileName(
+            repo.Fields,
+            parsed.FieldValues,
+            fileName,
+            contentType);
+        var ocrFieldList = parsed.OcrFieldList?.ToList() ?? new List<UploadIndexFieldDto>();
+        RepositoryNamingFieldMetadataInjector.EnsureInFieldList(
+            repo.Fields,
+            ocrFieldList,
+            fileName,
+            parsed.FieldValues,
+            contentType);
+
         var connectionString = _connectionProvider.ConnectionString
             ?? throw new InvalidOperationException("Tenant connection string not resolved.");
 
@@ -198,23 +199,24 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
             repo,
             tenantId,
             stageId,
-            ocrFieldValues,
+            parsed.FieldValues,
             status: "OCR",
             stageStatus: "OCR",
-            ocrResult: ocr.OcrJson,
+            ocrResult: parsed.OcrJson,
             userId,
-            cancellationToken);
+            cancellationToken,
+            ocrText: parsed.OcrText);
 
         var row = await RepositoryStageStore.GetAsync(connection, repo, tenantId, stageId, cancellationToken)
-            ?? throw new InvalidOperationException("Stage row not found after OCR update.");
+            ?? throw new InvalidOperationException("Stage row not found after metadata update.");
 
         return new UploadWithOcrResult(
             stageId.ToString("D"),
             repositoryId,
             row.FileName ?? fileName,
             row.FilePath ?? string.Empty,
-            ocr.OcrJson,
-            ocr.OcrFieldList);
+            parsed.OcrJson ?? row.OcrJson ?? string.Empty,
+            ocrFieldList);
     }
 
     public async Task<UploadIndexPromoteResult?> PromoteStageAsync(
@@ -222,6 +224,7 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
         Guid repositoryId,
         Guid tenantId,
         Guid? userId,
+        bool allowIncompleteFolderMetadata = false,
         CancellationToken cancellationToken = default)
     {
         var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
@@ -267,13 +270,31 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
         await source.CopyToAsync(promoteBuffer, cancellationToken);
         promoteBuffer.Position = 0;
 
-        var metadataJson = System.Text.Json.JsonSerializer.Serialize(row.FieldValues);
+        // fileId → stage row: field columns + OcrJson/OcrText → archive metadata.
+        var fieldValues = new Dictionary<string, string>(row.FieldValues, StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in RepositoryOcrJsonMetadataExtractor.Extract(row.OcrJson, row.SummaryJson))
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+            fieldValues.TryAdd(key, value);
+        }
+
+        RepositoryNamingFieldMetadataInjector.InjectFromOriginalFileName(
+            repo.Fields,
+            fieldValues,
+            row.FileName,
+            row.FileType);
+
+        var metadataJson = System.Text.Json.JsonSerializer.Serialize(fieldValues);
         var uploadRequest = new RepositoryUploadItemRequest(
             promoteBuffer,
             row.FileName,
             row.FileType,
             FileSize: row.FileSize,
-            Metadata: metadataJson);
+            Metadata: metadataJson,
+            OcrJson: row.OcrJson,
+            OcrText: row.OcrText,
+            AllowIncompleteFolderMetadata: allowIncompleteFolderMetadata);
 
         var result = await _archiveUpload.UploadItemAsync(
             repositoryId,
@@ -437,7 +458,7 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
 
         var fileStem = RepositoryArchiveFileNameResolver.ResolveArchiveFileStem(repo.Fields, row.FieldValues);
         if (string.IsNullOrWhiteSpace(fileStem))
-            fileStem = Path.GetFileNameWithoutExtension(row.FileName ?? string.Empty);
+            fileStem = Path.GetFileName(row.FileName ?? string.Empty);
         if (!string.IsNullOrWhiteSpace(fileStem))
             archiveSegments.Add(fileStem);
 
@@ -469,6 +490,121 @@ public sealed class RepositoryUploadIndexService : IRepositoryUploadIndexService
             IsDeleted: row.IsDeleted,
             TotalPage: 0,
             PromotedItemId: row.PromotedItemId?.ToString("D"));
+    }
+
+    private sealed record ParsedUploadWithOcrMetadata(
+        Dictionary<string, string> FieldValues,
+        IReadOnlyList<UploadIndexFieldDto>? OcrFieldList,
+        string? OcrJson,
+        string? OcrText);
+
+    /// <summary>
+    /// Accepts metadata from uploadForOcr / FE:
+    /// - flat object with field values (+ optional ocrJson / ocrText),
+    /// - { ocrJson, ocrFieldList },
+    /// - or [{ name, value, type }, ...].
+    /// </summary>
+    private static ParsedUploadWithOcrMetadata ParseUploadWithOcrMetadata(
+        string? metadataJson,
+        string? ocrJsonForm,
+        string? ocrTextForm)
+    {
+        var fieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        List<UploadIndexFieldDto>? fieldList = null;
+        string? ocrJson = string.IsNullOrWhiteSpace(ocrJsonForm) ? null : ocrJsonForm.Trim();
+        string? ocrText = string.IsNullOrWhiteSpace(ocrTextForm) ? null : ocrTextForm.Trim();
+
+        if (!string.IsNullOrWhiteSpace(metadataJson))
+        {
+            var trimmed = metadataJson.Trim();
+            if (trimmed.StartsWith('['))
+            {
+                fieldList = ParseFieldsList(trimmed);
+                fieldValues = ParseFieldsToDictionary(fieldList);
+            }
+            else if (trimmed.StartsWith('{'))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(trimmed);
+                    var root = doc.RootElement;
+
+                    if (root.TryGetProperty("ocrFieldList", out var listEl)
+                        || root.TryGetProperty("OcrFieldList", out listEl))
+                    {
+                        fieldList = JsonSerializer.Deserialize<List<UploadIndexFieldDto>>(
+                            listEl.GetRawText(), JsonOptions);
+                        fieldValues = ParseFieldsToDictionary(fieldList);
+                    }
+
+                    if (TryReadJsonPropertyAsString(root, "ocrJson", out var embeddedOcrJson)
+                        || TryReadJsonPropertyAsString(root, "OcrJson", out embeddedOcrJson))
+                    {
+                        ocrJson ??= embeddedOcrJson;
+                    }
+
+                    if (TryReadJsonPropertyAsString(root, "ocrText", out var embeddedOcrText)
+                        || TryReadJsonPropertyAsString(root, "OcrText", out embeddedOcrText))
+                    {
+                        ocrText ??= embeddedOcrText;
+                    }
+
+                    // Flat field map (Supplier, InvoiceNo, …) — skip known OCR payload keys.
+                    foreach (var prop in root.EnumerateObject())
+                    {
+                        if (prop.NameEquals("ocrJson") || prop.NameEquals("OcrJson")
+                            || prop.NameEquals("ocrText") || prop.NameEquals("OcrText")
+                            || prop.NameEquals("ocrFieldList") || prop.NameEquals("OcrFieldList"))
+                            continue;
+
+                        if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                            continue;
+
+                        var value = prop.Value.ValueKind == JsonValueKind.Null
+                            ? string.Empty
+                            : prop.Value.ToString();
+                        fieldValues[prop.Name] = value;
+                    }
+
+                    fieldList ??= fieldValues
+                        .Select(kv => new UploadIndexFieldDto(kv.Key, kv.Value))
+                        .ToList();
+                }
+                catch (JsonException)
+                {
+                    fieldValues = ParseFieldsToDictionary(trimmed);
+                    fieldList = fieldValues.Select(kv => new UploadIndexFieldDto(kv.Key, kv.Value)).ToList();
+                }
+            }
+            else
+            {
+                fieldValues = ParseFieldsToDictionary(trimmed);
+                fieldList = fieldValues.Select(kv => new UploadIndexFieldDto(kv.Key, kv.Value)).ToList();
+            }
+        }
+
+        // If ocrJson not provided separately, persist the field list / metadata as OcrJson.
+        if (string.IsNullOrWhiteSpace(ocrJson) && fieldList is { Count: > 0 })
+            ocrJson = JsonSerializer.Serialize(fieldList);
+
+        ocrText ??= OcrResultParser.TryParseOcrText(ocrJson);
+
+        return new ParsedUploadWithOcrMetadata(fieldValues, fieldList, ocrJson, ocrText);
+    }
+
+    private static bool TryReadJsonPropertyAsString(JsonElement root, string name, out string? value)
+    {
+        value = null;
+        if (!root.TryGetProperty(name, out var el))
+            return false;
+
+        value = el.ValueKind switch
+        {
+            JsonValueKind.String => el.GetString(),
+            JsonValueKind.Null => null,
+            _ => el.GetRawText()
+        };
+        return !string.IsNullOrWhiteSpace(value);
     }
 
     private static Dictionary<string, string> ParseFieldsToDictionary(IReadOnlyList<UploadIndexFieldDto>? fields)

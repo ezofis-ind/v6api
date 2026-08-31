@@ -16,7 +16,6 @@ public sealed class RepositoryAiSummaryService : IRepositoryAiSummaryService
     private readonly RepositoryAiSummaryOptions _options;
     private readonly ITenantConnectionProvider _connectionProvider;
     private readonly IStaticRepositoryProvisioner _provisioner;
-    private readonly IRepositoryItemQueryService _items;
     private readonly ILogger<RepositoryAiSummaryService> _logger;
 
     public RepositoryAiSummaryService(
@@ -24,14 +23,12 @@ public sealed class RepositoryAiSummaryService : IRepositoryAiSummaryService
         IOptions<RepositoryAiSummaryOptions> options,
         ITenantConnectionProvider connectionProvider,
         IStaticRepositoryProvisioner provisioner,
-        IRepositoryItemQueryService items,
         ILogger<RepositoryAiSummaryService> logger)
     {
         _httpClient = httpClient;
         _options = options.Value;
         _connectionProvider = connectionProvider;
         _provisioner = provisioner;
-        _items = items;
         _logger = logger;
         _httpClient.Timeout = TimeSpan.FromMinutes(Math.Clamp(_options.TimeoutMinutes, 1, 30));
     }
@@ -85,70 +82,18 @@ public sealed class RepositoryAiSummaryService : IRepositoryAiSummaryService
             throw new HttpRequestException("Repository:AiSummary:ApiUrl is not configured.");
 
         _logger.LogInformation(
-            "Calling AI summary API {Url} for tenant {TenantId}, repository {RepositoryId}, item {ItemId}",
+            "Calling AI summary API {Url} for tenant {TenantId}, repository {RepositoryId}, item {ItemId}, filepath {FilePath}",
             apiUrl,
             tenantId,
             repositoryId,
-            itemId);
+            itemId,
+            filePath);
 
-        var normalizedFilePath = NormalizeSummaryFilePath(filePath);
-        var useBase64Payload = ContainsNonAsciiPath(filePath);
-        HttpResponseMessage response;
-        string responseBody;
-
-        if (useBase64Payload)
-        {
-            _logger.LogInformation(
-                "AI summary item {ItemId} has non-ASCII blob path; sending file bytes to Python instead of blob path.",
-                itemId);
-            (response, responseBody) = await PostSummaryWithFileBytesAsync(
-                apiUrl,
-                tenantId,
-                repositoryId,
-                itemId,
-                cancellationToken);
-        }
-        else
-        {
-            (response, responseBody) = await PostSummaryRequestAsync(
-                apiUrl,
-                tenantId,
-                filePath,
-                cancellationToken: cancellationToken);
-
-            if (response.StatusCode == HttpStatusCode.NotFound
-                && !string.Equals(normalizedFilePath, filePath, StringComparison.Ordinal))
-            {
-                _logger.LogWarning(
-                    "AI summary API returned 404 for item {ItemId} with raw filepath; retrying with normalized filepath. Raw={RawFilePath} Normalized={NormalizedFilePath}",
-                    itemId,
-                    filePath,
-                    normalizedFilePath);
-
-                response.Dispose();
-                (response, responseBody) = await PostSummaryRequestAsync(
-                    apiUrl,
-                    tenantId,
-                    normalizedFilePath,
-                    cancellationToken: cancellationToken);
-            }
-
-            if (!response.IsSuccessStatusCode && IsBlobNotFoundResponse(response, responseBody))
-            {
-                _logger.LogWarning(
-                    "AI summary API could not read blob for item {ItemId}; retrying with file bytes. FilePath={FilePath}",
-                    itemId,
-                    filePath);
-
-                response.Dispose();
-                (response, responseBody) = await PostSummaryWithFileBytesAsync(
-                    apiUrl,
-                    tenantId,
-                    repositoryId,
-                    itemId,
-                    cancellationToken);
-            }
-        }
+        using var response = await _httpClient.PostAsJsonAsync(
+            apiUrl,
+            new { tenantId, filepath = filePath },
+            cancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -188,77 +133,4 @@ public sealed class RepositoryAiSummaryService : IRepositoryAiSummaryService
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength] + "...";
-
-    private async Task<(HttpResponseMessage Response, string Body)> PostSummaryRequestAsync(
-        string apiUrl,
-        Guid tenantId,
-        string filePath,
-        string? fileName = null,
-        CancellationToken cancellationToken = default)
-    {
-        object payload = string.IsNullOrWhiteSpace(fileName)
-            ? new { tenantId, filepath = filePath }
-            : new { tenantId, filepath = filePath, filename = fileName };
-
-        var response = await _httpClient.PostAsJsonAsync(apiUrl, payload, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        return (response, body);
-    }
-
-    private async Task<(HttpResponseMessage Response, string Body)> PostSummaryWithFileBytesAsync(
-        string apiUrl,
-        Guid tenantId,
-        Guid repositoryId,
-        Guid itemId,
-        CancellationToken cancellationToken)
-    {
-        var fileContent = await _items.OpenItemFileAsync(repositoryId, tenantId, itemId, cancellationToken)
-            ?? throw new FileNotFoundException("Repository file not found in storage for AI summary.");
-
-        using (fileContent.Stream)
-        {
-            using var buffer = new MemoryStream();
-            await fileContent.Stream.CopyToAsync(buffer, cancellationToken);
-            if (buffer.Length == 0)
-                throw new InvalidOperationException("Repository file is empty.");
-
-            var base64 = Convert.ToBase64String(buffer.ToArray());
-            var response = await _httpClient.PostAsJsonAsync(
-                apiUrl,
-                new
-                {
-                    tenantId,
-                    filepath = base64,
-                    file = base64,
-                    filename = fileContent.FileName
-                },
-                cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            return (response, body);
-        }
-    }
-
-    private static bool ContainsNonAsciiPath(string filePath) =>
-        filePath.Any(static c => c > 127);
-
-    private static bool IsBlobNotFoundResponse(HttpResponseMessage response, string body) =>
-        response.StatusCode == HttpStatusCode.NotFound
-        && body.Contains("Blob not found", StringComparison.OrdinalIgnoreCase);
-
-    private static string NormalizeSummaryFilePath(string filePath)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
-            return string.Empty;
-
-        var normalized = filePath
-            .Replace('\\', '/')
-            .TrimStart('/')
-            .Normalize(NormalizationForm.FormC);
-
-        return string.Join(
-            '/',
-            normalized
-                .Split('/', StringSplitOptions.RemoveEmptyEntries)
-                .Select(segment => segment.Normalize(NormalizationForm.FormC)));
-    }
 }

@@ -85,7 +85,8 @@ public sealed class OcrExtractionService : IOcrExtractionService
         }
 
         var fieldList = OcrResultParser.TryParseFieldList(rawJson);
-        return new OcrExtractionResult(rawJson, fieldList);
+        var ocrText = OcrResultParser.TryParseOcrText(rawJson);
+        return new OcrExtractionResult(rawJson, fieldList, ocrText);
     }
 
     private async Task<string> PostAsync(string apiUrl, Dictionary<string, object> payload, CancellationToken cancellationToken)

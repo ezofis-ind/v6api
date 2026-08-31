@@ -28,13 +28,31 @@ public sealed class RepositoryBrowseService : IRepositoryBrowseService
         var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
             ?? throw new InvalidOperationException("Repository not found.");
 
-        var folderFields = RepositoryFolderStructureHelper.OrderFolderFields(
-            repo.Fields.Where(f => f.IncludeInFolderStructure))
+        // Same as archive: highest IncludeInFolderStructure field is the file name, not a browse folder group.
+        var orderedFolderFields = RepositoryFolderStructureHelper.OrderFolderFields(
+            repo.Fields.Where(f => f.IncludeInFolderStructure));
+        var pathFolderFields = RepositoryArchiveFileNameResolver.PathFolderFields(repo.Fields, orderedFolderFields);
+
+        var folderFields = pathFolderFields
             .Select(f => new BrowseFolderFieldDto(f.Level, f.Name, f.SqlColumnName))
             .ToList();
 
-        var paths = BuildBrowsePaths(folderFields);
-        return new BrowseStructureDto(folderFields, paths);
+        // Naming-only repo (e.g. only Filename): keep "By Filename" in the tree, but with empty fieldOrder
+        // so children is immediately leaf and FE loads the file list (not PDF names as folders).
+        if (folderFields.Count == 0 && orderedFolderFields.Count > 0)
+        {
+            var naming = RepositoryArchiveFileNameResolver.ResolveNamingField(repo.Fields, orderedFolderFields)
+                ?? orderedFolderFields[^1];
+            var label = ContainsArabicScript(naming.Name) ? naming.Name : $"By {naming.Name}";
+            var paths = new List<BrowsePathDto>
+            {
+                new($"by-{naming.SqlColumnName}", label, Array.Empty<string>())
+            };
+            return new BrowseStructureDto(folderFields, paths);
+        }
+
+        var browsePaths = BuildBrowsePaths(folderFields);
+        return new BrowseStructureDto(folderFields, browsePaths);
     }
 
     public async Task<BrowseChildrenResponseDto> GetBrowseChildrenAsync(
@@ -50,10 +68,41 @@ public sealed class RepositoryBrowseService : IRepositoryBrowseService
         CancellationToken cancellationToken = default)
     {
         var structure = await GetBrowseStructureAsync(repositoryId, tenantId, cancellationToken);
-        if (structure.FolderFields.Count == 0)
-            throw new InvalidOperationException("No folder structure fields configured for this repository.");
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+
+        // No real folder levels, or naming-only path (empty FieldOrder) → leaf / show files.
+        if (structure.FolderFields.Count == 0 || structure.BrowsePaths.Count == 0)
+        {
+            BrowsePathDto? namingPath = structure.BrowsePaths.Count > 0
+                ? ResolveBrowsePath(structure, pathId)
+                : null;
+            return new BrowseChildrenResponseDto(
+                Level: 0,
+                GroupField: string.Empty,
+                GroupFieldName: string.Empty,
+                PathId: namingPath?.Id ?? (string.IsNullOrWhiteSpace(pathId) ? string.Empty : pathId.Trim()),
+                PathLabel: namingPath?.Label ?? string.Empty,
+                ParentFilters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                IsLeafLevel: true,
+                Groups: new PagedResult<BrowseGroupDto>(Array.Empty<BrowseGroupDto>(), page, pageSize, 0));
+        }
 
         var path = ResolveBrowsePath(structure, pathId);
+
+        // Path exists only as a file-list entry (naming field), not as a group drill-down.
+        if (path.FieldOrder.Count == 0)
+        {
+            return new BrowseChildrenResponseDto(
+                Level: 0,
+                GroupField: string.Empty,
+                GroupFieldName: string.Empty,
+                PathId: path.Id,
+                PathLabel: path.Label,
+                ParentFilters: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                IsLeafLevel: true,
+                Groups: new PagedResult<BrowseGroupDto>(Array.Empty<BrowseGroupDto>(), page, pageSize, 0));
+        }
 
         var folderByColumn = structure.FolderFields.ToDictionary(f => f.SqlColumnName, StringComparer.OrdinalIgnoreCase);
         var appliedFilters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -142,14 +191,15 @@ public sealed class RepositoryBrowseService : IRepositoryBrowseService
         if (!RepositorySqlHelper.IsValidItemsTableName(repo.ItemsTableName))
             throw new InvalidOperationException("Invalid items table.");
 
-        var folderFields = RepositoryFolderStructureHelper.OrderFolderFields(
+        var orderedFolderFields = RepositoryFolderStructureHelper.OrderFolderFields(
             repo.Fields.Where(f => f.IncludeInFolderStructure));
+        var folderFields = RepositoryArchiveFileNameResolver.PathFolderFields(repo.Fields, orderedFolderFields);
 
         if (folderFields.Count == 0)
             throw new InvalidOperationException("No folder structure fields configured for this repository.");
 
         var groupFieldDef = ResolveFolderField(folderFields, groupField)
-            ?? throw new ArgumentException($"Field '{groupField}' is not a folder structure field for this repository.");
+            ?? throw new ArgumentException($"Field '{groupField}' is not a browse folder field for this repository.");
 
         var groupCol = RepositorySqlHelper.SanitizeColumnName(groupFieldDef.SqlColumnName);
         var allowedFilterColumns = folderFields

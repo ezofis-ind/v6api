@@ -22,6 +22,7 @@ internal sealed class RepositoryStageRow
     public Guid? ModifiedBy { get; init; }
     public bool IsDeleted { get; init; }
     public string? OcrJson { get; init; }
+    public string? OcrText { get; init; }
     public string? SummaryJson { get; init; }
     public Dictionary<string, string> FieldValues { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }
@@ -167,6 +168,7 @@ internal static class RepositoryStageStore
             ModifiedBy = GetNullableGuid(values, "ModifiedBy"),
             IsDeleted = GetBool(values, "IsDeleted"),
             OcrJson = GetString(values, "OcrJson"),
+            OcrText = GetString(values, "OcrText"),
             SummaryJson = GetString(values, "SummaryJson"),
             FieldValues = fieldValues
         };
@@ -182,7 +184,8 @@ internal static class RepositoryStageStore
         string? stageStatus,
         string? ocrResult,
         Guid? userId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? ocrText = null)
     {
         var table = RepositorySqlHelper.QualifiedItemsTable(repo.StageTableName);
         var tableColumns = await RepositoryItemTableColumns.LoadAsync(connection, repo.StageTableName, cancellationToken);
@@ -214,6 +217,8 @@ internal static class RepositoryStageStore
             updates.Add("[StageStatus] = @StageStatus");
         if (!string.IsNullOrWhiteSpace(ocrResult) && RepositoryItemTableColumns.Has(tableColumns, "OcrJson"))
             updates.Add("[OcrJson] = @OcrJson");
+        if (!string.IsNullOrWhiteSpace(ocrText) && RepositoryItemTableColumns.Has(tableColumns, "OcrText"))
+            updates.Add("[OcrText] = @OcrText");
 
         updates.Add("[ModifiedAtUtc] = SYSUTCDATETIME()");
         if (RepositoryItemTableColumns.Has(tableColumns, "ModifiedBy"))
@@ -225,6 +230,8 @@ internal static class RepositoryStageStore
             parameters.Add(new SqlParameter("@StageStatus", stageStatus));
         if (!string.IsNullOrWhiteSpace(ocrResult))
             parameters.Add(new SqlParameter("@OcrJson", ocrResult));
+        if (!string.IsNullOrWhiteSpace(ocrText))
+            parameters.Add(new SqlParameter("@OcrText", ocrText));
         parameters.Add(new SqlParameter("@ModifiedBy", (object?)userId ?? DBNull.Value));
 
         var sql = $"""

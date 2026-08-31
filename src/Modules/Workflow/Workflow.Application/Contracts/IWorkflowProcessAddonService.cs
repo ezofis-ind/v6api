@@ -11,6 +11,7 @@ public interface IWorkflowProcessAddonService
         string? fileName,
         int? transactionId,
         Guid userId,
+        string? contentType = null,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<WorkflowProcessAddonRow>> ListByProcessAsync(

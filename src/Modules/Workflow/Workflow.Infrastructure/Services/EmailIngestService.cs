@@ -5,21 +5,31 @@ using System.Text.RegularExpressions;
 using MediatR;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SaaSApp.MultiTenancy;
+using SaaSApp.Repository.Application;
 using SaaSApp.Workflow.Application.Connectors;
 using SaaSApp.Workflow.Application.Contracts;
+using SaaSApp.Workflow.Application.Workflows;
 using SaaSApp.Workflow.Application.Workflows.Commands.StartWorkflow;
 using SaaSApp.Workflow.Infrastructure.Jobs;
+using SaaSApp.Workflow.Infrastructure.Options;
 
 namespace SaaSApp.Workflow.Infrastructure.Services;
 
 public sealed class EmailIngestService : IEmailIngestService
 {
-    private const string DefaultExtensions = ".pdf,.tif,.tiff";
+    private const string DefaultExtensions = ".pdf,.tif,.tiff,.png,.jpg,.jpeg";
     /// <summary>Sentinel AttachmentId meaning the whole message was handled (do not poll again).</summary>
     private const string MessageHandledSentinel = "__message_handled__";
 
-    /// <summary>Image types often used in email signatures — only used if no document attachment exists.</summary>
+    /// <summary>Raster images accepted as invoice/document attachments (not signature badges).</summary>
+    private static readonly HashSet<string> IngestibleImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg"
+    };
+
+    /// <summary>Image types often used in email signatures — filtered when not an allowed ingest type.</summary>
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"
@@ -27,7 +37,8 @@ public sealed class EmailIngestService : IEmailIngestService
 
     private static readonly HashSet<string> DocumentExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".pdf", ".tif", ".tiff", ".doc", ".docx", ".xls", ".xlsx"
+        ".pdf", ".tif", ".tiff", ".doc", ".docx", ".xls", ".xlsx",
+        ".png", ".jpg", ".jpeg"
     };
     private static readonly Guid SystemUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
@@ -37,6 +48,11 @@ public sealed class EmailIngestService : IEmailIngestService
     private readonly IConnectorService _connectorService;
     private readonly IConnectorOAuthService _oauthService;
     private readonly IMediator _mediator;
+    private readonly IWorkflowRepository _workflowRepository;
+    private readonly IEmailIngestNormalWorkflowStarter _normalWorkflowStarter;
+    private readonly EmailIngestActorResolver _actorResolver;
+    private readonly JobExecutionContext _jobContext;
+    private readonly IOptions<EmailIngestOptions> _options;
     private readonly ILogger<EmailIngestService> _logger;
 
     public EmailIngestService(
@@ -46,6 +62,11 @@ public sealed class EmailIngestService : IEmailIngestService
         IConnectorService connectorService,
         IConnectorOAuthService oauthService,
         IMediator mediator,
+        IWorkflowRepository workflowRepository,
+        IEmailIngestNormalWorkflowStarter normalWorkflowStarter,
+        EmailIngestActorResolver actorResolver,
+        JobExecutionContext jobContext,
+        IOptions<EmailIngestOptions> options,
         ILogger<EmailIngestService> logger)
     {
         _tenantContext = tenantContext;
@@ -54,6 +75,11 @@ public sealed class EmailIngestService : IEmailIngestService
         _connectorService = connectorService;
         _oauthService = oauthService;
         _mediator = mediator;
+        _workflowRepository = workflowRepository;
+        _normalWorkflowStarter = normalWorkflowStarter;
+        _actorResolver = actorResolver;
+        _jobContext = jobContext;
+        _options = options;
         _logger = logger;
     }
 
@@ -76,7 +102,7 @@ public sealed class EmailIngestService : IEmailIngestService
                     MasterSource NVARCHAR(32) NOT NULL CONSTRAINT DF_EmailIngestMailbox_MasterSource DEFAULT (N'InternalForm'),
                     MasterFormId NVARCHAR(128) NULL,
                     MasterConnectorId UNIQUEIDENTIFIER NULL,
-                    AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.tif,.tiff'),
+                    AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.tif,.tiff,.png,.jpg,.jpeg'),
                     LastPolledAtUtc DATETIME2(3) NULL,
                     LastError NVARCHAR(2000) NULL,
                     CreatedAtUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Created DEFAULT (SYSUTCDATETIME()),
@@ -135,6 +161,36 @@ public sealed class EmailIngestService : IEmailIngestService
                 );
                 CREATE INDEX IX_connector_IsDeleted ON dbo.connector (IsDeleted);
                 CREATE INDEX IX_connector_ProviderCode ON dbo.connector (ProviderCode) WHERE IsDeleted = 0;
+            END
+
+            -- Accept PNG/JPEG on existing mailboxes that still use the old PDF-only default.
+            IF OBJECT_ID(N'dbo.EmailIngestMailbox', N'U') IS NOT NULL
+            BEGIN
+                UPDATE dbo.EmailIngestMailbox
+                SET AttachmentExtensions = N'.pdf,.tif,.tiff,.png,.jpg,.jpeg'
+                WHERE IsDeleted = 0
+                  AND LTRIM(RTRIM(AttachmentExtensions)) = N'.pdf,.tif,.tiff';
+
+                UPDATE dbo.EmailIngestMailbox
+                SET AttachmentExtensions = CASE
+                    WHEN AttachmentExtensions NOT LIKE N'%.png%' THEN AttachmentExtensions + N',.png'
+                    ELSE AttachmentExtensions END
+                WHERE IsDeleted = 0
+                  AND AttachmentExtensions NOT LIKE N'%.png%';
+
+                UPDATE dbo.EmailIngestMailbox
+                SET AttachmentExtensions = CASE
+                    WHEN AttachmentExtensions NOT LIKE N'%.jpg%' THEN AttachmentExtensions + N',.jpg'
+                    ELSE AttachmentExtensions END
+                WHERE IsDeleted = 0
+                  AND AttachmentExtensions NOT LIKE N'%.jpg%';
+
+                UPDATE dbo.EmailIngestMailbox
+                SET AttachmentExtensions = CASE
+                    WHEN AttachmentExtensions NOT LIKE N'%.jpeg%' THEN AttachmentExtensions + N',.jpeg'
+                    ELSE AttachmentExtensions END
+                WHERE IsDeleted = 0
+                  AND AttachmentExtensions NOT LIKE N'%.jpeg%';
             END
             """;
         await using var cmd = new SqlCommand(sql, connection) { CommandTimeout = 120 };
@@ -319,10 +375,11 @@ public sealed class EmailIngestService : IEmailIngestService
     {
         await EnsureSchemaAsync(cancellationToken);
         var mailboxes = await ListMailboxesAsync(cancellationToken);
+        var now = DateTime.UtcNow;
         var due = mailboxes.Where(m =>
             m.IsEnabled &&
             (m.LastPolledAtUtc == null ||
-             m.LastPolledAtUtc.Value.AddMinutes(Math.Max(1, m.PollIntervalMinutes)) <= DateTime.UtcNow));
+             m.LastPolledAtUtc.Value.AddSeconds(ResolvePollIntervalSeconds(m.PollIntervalMinutes)) <= now));
 
         var results = new List<EmailIngestPollResultDto>();
         foreach (var mailbox in due)
@@ -361,6 +418,27 @@ public sealed class EmailIngestService : IEmailIngestService
 
         try
         {
+            var workflow = await _workflowRepository.GetByIdWithStepsAsync(mailbox.WorkflowId, cancellationToken);
+            if (workflow == null || workflow.IsDeleted)
+                throw new InvalidOperationException($"Workflow {mailbox.WorkflowId:D} not found for mailbox.");
+
+            var orderedSteps = workflow.Steps.OrderBy(s => s.Order).ToList();
+            var isApWorkflow = WorkflowStepTransitionHelper.TryResolveDedicatedApAgentStep(orderedSteps) != null;
+
+            var tenantId = _tenantContext.TenantId
+                ?? throw new InvalidOperationException("Tenant context is required for email ingest.");
+            var actorUserId = await _actorResolver.ResolveAsync(
+                mailbox.ConnectorId,
+                mailbox.Id,
+                mailbox.WorkflowId,
+                cancellationToken);
+            ApplyEmailIngestActor(tenantId, actorUserId);
+
+            _logger.LogInformation(
+                "Email ingest mailbox {MailboxId}: resolved actor user {ActorUserId}",
+                mailboxId,
+                actorUserId);
+
             var messages = await _oauthService.ListGmailMessagesAsync(
                 mailbox.ConnectorId,
                 maxResults: 25,
@@ -368,7 +446,7 @@ public sealed class EmailIngestService : IEmailIngestService
                 unreadOnly: true,
                 cancellationToken);
 
-            var extensions = ParseExtensions(mailbox.AttachmentExtensions);
+            var extensions = EnsureStandardIngestExtensions(ParseExtensions(mailbox.AttachmentExtensions));
             foreach (var message in messages.Items)
             {
                 scanned++;
@@ -382,12 +460,26 @@ public sealed class EmailIngestService : IEmailIngestService
                     continue;
                 }
 
-                // Prefer real invoice docs (PDF/TIFF). Skip email-signature / inline badge images.
+                // Prefer real invoice docs (PDF/TIFF/images). Skip email-signature / inline badge images.
                 var matching = SelectIngestAttachments(message.Attachments, extensions);
 
                 if (matching.Count == 0)
                 {
-                    await EnsureMessageHandledAsync(mailboxId, message.Id, messageKey, mailbox.ConnectorId, cancellationToken);
+                    if (message.Attachments is { Count: > 0 })
+                    {
+                        _logger.LogWarning(
+                            "Email ingest mailbox {MailboxId} message {MessageId}: {AttachmentCount} attachment(s) found but none matched ingest rules. Files=[{Files}]. Message left unread for retry.",
+                            mailboxId,
+                            message.Id,
+                            message.Attachments.Count,
+                            string.Join(", ", message.Attachments.Select(a =>
+                                $"{a.FileName ?? "(no name)"}|{a.MimeType ?? "no-mime"}|{a.SizeBytes?.ToString() ?? "?"}B")));
+                    }
+                    else
+                    {
+                        await EnsureMessageHandledAsync(mailboxId, message.Id, messageKey, mailbox.ConnectorId, cancellationToken);
+                    }
+
                     skipped++;
                     continue;
                 }
@@ -414,7 +506,7 @@ public sealed class EmailIngestService : IEmailIngestService
 
                     try
                     {
-                        var (stream, contentType, fileName) = await _oauthService.DownloadGmailAttachmentAsync(
+                        var (stream, contentType, downloadedFileName) = await _oauthService.DownloadGmailAttachmentAsync(
                             mailbox.ConnectorId, message.Id, att.Id, cancellationToken);
                         await using (stream)
                         {
@@ -427,6 +519,12 @@ public sealed class EmailIngestService : IEmailIngestService
                                 alreadyDone++;
                                 continue;
                             }
+
+                            var originalContentType = ResolveAttachmentContentType(att, contentType, att.FileName);
+                            var originalFileName = ResolveAttachmentFileName(att, downloadedFileName, originalContentType);
+                            originalFileName = RepositoryFileNameHelper.EnsureExtension(
+                                originalFileName,
+                                originalContentType);
 
                             // Claim attachment row before StartWorkflow so a start failure cannot re-loop.
                             await MarkProcessedAsync(mailboxId, messageKey, attKey, null, cancellationToken);
@@ -441,20 +539,28 @@ public sealed class EmailIngestService : IEmailIngestService
                                 ["subject"] = message.Subject,
                                 ["receivedAtUtc"] = message.ReceivedAtUtc,
                                 ["attachmentId"] = att.Id,
-                                ["attachmentFileName"] = fileName ?? att.FileName,
+                                ["attachmentFileName"] = originalFileName,
                                 ["masterSource"] = mailbox.MasterSource,
                                 ["masterFormId"] = mailbox.MasterFormId,
                                 ["masterConnectorId"] = mailbox.MasterConnectorId
                             });
 
-                            var startResult = await _mediator.Send(new StartWorkflowCommand(
-                                mailbox.WorkflowId,
-                                Context: contextJson,
-                                Attachment: new StartWorkflowAttachmentPayload(
+                            var startResult = isApWorkflow
+                                ? await _mediator.Send(new StartWorkflowCommand(
+                                    mailbox.WorkflowId,
+                                    Context: contextJson,
+                                    Attachment: new StartWorkflowAttachmentPayload(
+                                        bytes,
+                                        originalFileName,
+                                        originalContentType),
+                                    TriggerApAgentPythonJob: true), cancellationToken)
+                                : await _normalWorkflowStarter.StartAsync(
+                                    workflow,
                                     bytes,
-                                    fileName ?? att.FileName ?? "invoice.bin",
-                                    contentType ?? att.MimeType),
-                                TriggerApAgentPythonJob: true), cancellationToken);
+                                    originalFileName,
+                                    originalContentType,
+                                    contextJson,
+                                    cancellationToken);
 
                             await TrySetProcessedInstanceIdAsync(
                                 mailboxId, messageKey, attKey, startResult.InstanceId, cancellationToken);
@@ -524,8 +630,25 @@ public sealed class EmailIngestService : IEmailIngestService
         else
             throw new InvalidOperationException("masterSource must be InternalForm or QuickBooks.");
 
-        if (request.PollIntervalMinutes < 1 || request.PollIntervalMinutes > 1440)
-            throw new InvalidOperationException("pollIntervalMinutes must be between 1 and 1440.");
+        if (request.PollIntervalMinutes < 0 || request.PollIntervalMinutes > 1440)
+            throw new InvalidOperationException("pollIntervalMinutes must be between 0 and 1440 (0 = use EmailIngest:MinimumPollIntervalSeconds).");
+    }
+
+    private int ResolvePollIntervalSeconds(int pollIntervalMinutes)
+    {
+        var minimum = Math.Max(1, _options.Value.MinimumPollIntervalSeconds);
+        if (pollIntervalMinutes <= 0)
+            return minimum;
+
+        return Math.Max(minimum, pollIntervalMinutes * 60);
+    }
+
+    private void ApplyEmailIngestActor(Guid tenantId, Guid actorUserId)
+    {
+        if (!_jobContext.IsActive)
+            return;
+
+        _jobContext.Set(tenantId, actorUserId);
     }
 
     private static void BindUpsert(SqlCommand cmd, Guid id, EmailIngestMailboxUpsertRequest request, Guid? userId)
@@ -734,6 +857,62 @@ public sealed class EmailIngestService : IEmailIngestService
     }
 
     /// <summary>
+    /// Prefer the original attachment name from message metadata (Gmail list API). Download APIs may
+    /// return only the provider attachment id, which must not be sent to OCR as the file name.
+    /// </summary>
+    private static string ResolveAttachmentFileName(
+        ConnectorGmailAttachmentDto att,
+        string? downloadedFileName,
+        string? contentType)
+    {
+        if (!string.IsNullOrWhiteSpace(att.FileName))
+            return att.FileName.Trim();
+
+        if (!string.IsNullOrWhiteSpace(downloadedFileName)
+            && !string.Equals(downloadedFileName.Trim(), att.Id, StringComparison.Ordinal))
+            return downloadedFileName.Trim();
+
+        var ext = ExtensionFromMimeType(contentType) ?? ".bin";
+        return $"attachment{ext}";
+    }
+
+    /// <summary>
+    /// Gmail download returns <c>application/octet-stream</c>; prefer message metadata mime type.
+    /// </summary>
+    private static string ResolveAttachmentContentType(
+        ConnectorGmailAttachmentDto att,
+        string? downloadedContentType,
+        string? resolvedFileName)
+    {
+        if (!string.IsNullOrWhiteSpace(att.MimeType)
+            && !IsGenericBinaryContentType(att.MimeType))
+        {
+            return att.MimeType.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(downloadedContentType)
+            && !IsGenericBinaryContentType(downloadedContentType))
+        {
+            return downloadedContentType.Trim();
+        }
+
+        var ext = Path.GetExtension(resolvedFileName ?? att.FileName ?? string.Empty);
+        return ext.ToLowerInvariant() switch
+        {
+            ".pdf" => "application/pdf",
+            ".tif" or ".tiff" => "image/tiff",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            _ => !string.IsNullOrWhiteSpace(att.MimeType) ? att.MimeType.Trim() : "application/pdf"
+        };
+    }
+
+    private static bool IsGenericBinaryContentType(string? contentType) =>
+        string.IsNullOrWhiteSpace(contentType)
+        || string.Equals(contentType.Trim(), "application/octet-stream", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(contentType.Trim(), "binary/octet-stream", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Stable short key for dedup. Raw Outlook attachment ids change/are huge; filename+size is stable.
     /// </summary>
     private static string BuildAttachmentDedupKey(ConnectorGmailAttachmentDto att)
@@ -774,6 +953,13 @@ public sealed class EmailIngestService : IEmailIngestService
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private static HashSet<string> EnsureStandardIngestExtensions(HashSet<string> extensions)
+    {
+        foreach (var ext in DocumentExtensions)
+            extensions.Add(ext);
+        return extensions;
+    }
+
     private static HashSet<string> ParseExtensions(string? raw)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -785,44 +971,99 @@ public sealed class EmailIngestService : IEmailIngestService
         return set;
     }
 
-    private static bool MatchesExtension(string? fileName, HashSet<string> extensions)
+    private static bool MatchesExtension(
+        ConnectorGmailAttachmentDto attachment,
+        HashSet<string> extensions)
     {
-        if (string.IsNullOrWhiteSpace(fileName))
-            return false;
-        var ext = Path.GetExtension(fileName);
-        return !string.IsNullOrEmpty(ext) && extensions.Contains(ext);
+        var fileName = attachment.FileName;
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            var ext = Path.GetExtension(fileName);
+            if (!string.IsNullOrEmpty(ext) && extensions.Contains(ext))
+                return true;
+        }
+
+        var mimeExt = ExtensionFromMimeType(attachment.MimeType);
+        return !string.IsNullOrEmpty(mimeExt) && extensions.Contains(mimeExt);
+    }
+
+    private static string? ExtensionFromMimeType(string? mimeType)
+    {
+        if (string.IsNullOrWhiteSpace(mimeType))
+            return null;
+
+        var mime = mimeType.Trim().Split(';')[0].Trim().ToLowerInvariant();
+        return mime switch
+        {
+            "application/pdf" => ".pdf",
+            "image/tiff" or "image/tif" => ".tiff",
+            "image/png" => ".png",
+            "image/jpeg" or "image/jpg" => ".jpg",
+            "application/msword" => ".doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+            "application/vnd.ms-excel" => ".xls",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
+            _ => null
+        };
+    }
+
+    private static bool IsIngestibleRasterImage(ConnectorGmailAttachmentDto attachment, HashSet<string> allowedExtensions)
+    {
+        var ext = Path.GetExtension(attachment.FileName ?? string.Empty);
+        if (!string.IsNullOrEmpty(ext)
+            && allowedExtensions.Contains(ext)
+            && IngestibleImageExtensions.Contains(ext))
+        {
+            return true;
+        }
+
+        var mimeExt = ExtensionFromMimeType(attachment.MimeType);
+        return !string.IsNullOrEmpty(mimeExt)
+            && allowedExtensions.Contains(mimeExt)
+            && IngestibleImageExtensions.Contains(mimeExt);
     }
 
     /// <summary>
-    /// Prefer PDF/docs over signature images. If a message has both a PDF and badge PNGs, only the PDF is ingested.
+    /// Prefer PDF/docs/images over signature badges. If a message has both a PDF and badge PNGs, only real docs are ingested.
     /// </summary>
     private static List<ConnectorGmailAttachmentDto> SelectIngestAttachments(
         IReadOnlyList<ConnectorGmailAttachmentDto> attachments,
         HashSet<string> allowedExtensions)
     {
         var candidates = attachments
-            .Where(a => MatchesExtension(a.FileName, allowedExtensions))
-            .Where(a => !IsLikelySignatureOrInlineImage(a))
+            .Where(a => MatchesExtension(a, allowedExtensions))
+            .Where(a => !IsLikelySignatureOrInlineImage(a, allowedExtensions))
             .ToList();
 
-        var documents = candidates.Where(IsDocumentAttachment).ToList();
+        var documents = candidates.Where(a => IsDocumentAttachment(a, allowedExtensions)).ToList();
         if (documents.Count > 0)
             return documents;
 
-        // No document — do not fall back to small signature images.
+        var ingestibleImages = candidates.Where(a => IsIngestibleRasterImage(a, allowedExtensions)).ToList();
+        if (ingestibleImages.Count > 0)
+            return ingestibleImages;
+
         return candidates.Where(a => !IsImageAttachment(a)).ToList();
     }
 
-    private static bool IsDocumentAttachment(ConnectorGmailAttachmentDto a)
+    private static bool IsDocumentAttachment(ConnectorGmailAttachmentDto a, HashSet<string> allowedExtensions)
     {
         var ext = Path.GetExtension(a.FileName ?? string.Empty);
-        if (DocumentExtensions.Contains(ext))
+        if (!string.IsNullOrEmpty(ext) && DocumentExtensions.Contains(ext) && allowedExtensions.Contains(ext))
             return true;
+
+        var mimeExt = ExtensionFromMimeType(a.MimeType);
+        if (!string.IsNullOrEmpty(mimeExt) && DocumentExtensions.Contains(mimeExt) && allowedExtensions.Contains(mimeExt))
+            return true;
+
         var mime = a.MimeType ?? string.Empty;
         return mime.Contains("pdf", StringComparison.OrdinalIgnoreCase)
             || mime.Contains("tiff", StringComparison.OrdinalIgnoreCase)
             || mime.Contains("msword", StringComparison.OrdinalIgnoreCase)
-            || mime.Contains("officedocument", StringComparison.OrdinalIgnoreCase);
+            || mime.Contains("officedocument", StringComparison.OrdinalIgnoreCase)
+            || mime.Contains("image/png", StringComparison.OrdinalIgnoreCase)
+            || mime.Contains("image/jpeg", StringComparison.OrdinalIgnoreCase)
+            || mime.Contains("image/jpg", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsImageAttachment(ConnectorGmailAttachmentDto a)
@@ -834,23 +1075,34 @@ public sealed class EmailIngestService : IEmailIngestService
         return mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsLikelySignatureOrInlineImage(ConnectorGmailAttachmentDto a)
+    private static bool IsLikelySignatureOrInlineImage(
+        ConnectorGmailAttachmentDto a,
+        HashSet<string> allowedExtensions)
     {
         if (!IsImageAttachment(a))
             return false;
 
-        // Signature / badge images are usually small; invoice scans are larger.
+        // Real PNG/JPEG document scans — only skip obvious signature/badge file names.
+        if (IsIngestibleRasterImage(a, allowedExtensions))
+            return HasSignatureImageFileName(a.FileName);
+
+        // Other images: skip small embedded badges.
         if (a.SizeBytes is > 0 and < 200_000)
             return true;
 
-        var name = Path.GetFileNameWithoutExtension(a.FileName ?? string.Empty).Trim();
+        return HasSignatureImageFileName(a.FileName);
+    }
+
+    private static bool HasSignatureImageFileName(string? fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName ?? string.Empty).Trim();
         if (string.IsNullOrEmpty(name))
-            return true;
+            return false;
 
-        if (Regex.IsMatch(name, @"^(image|img|logo|signature|sig|banner|badge|icon|cid_|untitled)\d*$", RegexOptions.IgnoreCase))
-            return true;
-
-        return false;
+        return Regex.IsMatch(
+            name,
+            @"^(image|img|logo|signature|sig|banner|badge|icon|cid_|untitled)\d*$",
+            RegexOptions.IgnoreCase);
     }
 
     private string RequireConnectionString() =>

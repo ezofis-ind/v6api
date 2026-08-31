@@ -38,7 +38,9 @@ public sealed class WorkflowLegacyMailboxSyncService : IWorkflowLegacyMailboxSyn
         Guid? ItemId,
         string? FormId,
         string? FormEntryId,
-        string? FormData);
+        string? FormData,
+        string? SenderEmail = null,
+        string? CreatedByName = null);
 
 
 
@@ -344,10 +346,21 @@ WHERE t.Id = @TransactionRowId;";
                 : sentTable;
 
         // Keep mailbox aligned with workflow state: no stale inbox after approve; no inbox/sent after complete.
+        List<Guid>? completedRecipients = null;
         if (targetTable == sentTable)
             await DeleteMailboxRowsForInstanceAsync(connection, workflowIdValue, workflowIdCompact, workflowInstanceId, workflowInstanceIdStr, inboxTable, cancellationToken);
         else if (targetTable == completedTable)
         {
+            completedRecipients = await CollectInstanceParticipantUserIdsAsync(
+                connection,
+                workflowIdValue,
+                workflowIdCompact,
+                workflowInstanceId,
+                workflowInstanceIdStr,
+                transactionTable,
+                inboxTable,
+                sentTable,
+                cancellationToken);
             await DeleteMailboxRowsForInstanceAsync(connection, workflowIdValue, workflowIdCompact, workflowInstanceId, workflowInstanceIdStr, inboxTable, cancellationToken);
             await DeleteMailboxRowsForInstanceAsync(connection, workflowIdValue, workflowIdCompact, workflowInstanceId, workflowInstanceIdStr, sentTable, cancellationToken);
         }
@@ -416,7 +429,7 @@ INSERT INTO {targetTable}
      transaction_createdAt, transaction_createdBy, transaction_createdByEmail,
 
      transaction_modifiedAt, transaction_modifiedBy, activityUserEmail,
-     repositoryId, itemId, formId, formEntryId, formData, [action])
+     repositoryId, itemId, formId, formEntryId, formData, createdByName, [action])
 
 {sourceSql};";
 
@@ -437,7 +450,38 @@ INSERT INTO {targetTable}
             insertCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
             insertCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
             AddNVarCharMax(insertCmd, "@FormData", extras.FormData);
+            insertCmd.Parameters.AddWithValue("@SenderEmail", (object?)extras.SenderEmail ?? DBNull.Value);
+            insertCmd.Parameters.AddWithValue("@CreatedByName", (object?)extras.CreatedByName ?? DBNull.Value);
             await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (targetTable == completedTable && completedRecipients is { Count: > 0 })
+        {
+            foreach (var recipientId in completedRecipients)
+            {
+                if (activityUserId is Guid endAssignee && recipientId == endAssignee)
+                    continue;
+                if (recipientId == Guid.Empty)
+                    continue;
+
+                await using var completedCcCmd = new SqlCommand(insertSql, connection);
+                completedCcCmd.Parameters.AddWithValue("@WorkflowGuid", workflowId);
+                completedCcCmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
+                completedCcCmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+                completedCcCmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
+                completedCcCmd.Parameters.AddWithValue("@TransactionRowId", transactionRowId);
+                completedCcCmd.Parameters.AddWithValue("@TxGuidStr", txIdStr);
+                completedCcCmd.Parameters.AddWithValue("@OverrideUserId", recipientId.ToString("D"));
+                completedCcCmd.Parameters.AddWithValue("@Action", resolvedAction);
+                completedCcCmd.Parameters.AddWithValue("@RepositoryId", (object?)extras.RepositoryId?.ToString("D") ?? DBNull.Value);
+                completedCcCmd.Parameters.AddWithValue("@ItemId", (object?)extras.ItemId?.ToString("D") ?? DBNull.Value);
+                completedCcCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
+                completedCcCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
+                AddNVarCharMax(completedCcCmd, "@FormData", extras.FormData);
+                completedCcCmd.Parameters.AddWithValue("@SenderEmail", (object?)extras.SenderEmail ?? DBNull.Value);
+                completedCcCmd.Parameters.AddWithValue("@CreatedByName", (object?)extras.CreatedByName ?? DBNull.Value);
+                await completedCcCmd.ExecuteNonQueryAsync(cancellationToken);
+            }
         }
 
         if (targetTable == inboxTable
@@ -461,6 +505,8 @@ INSERT INTO {targetTable}
             ccCmd.Parameters.AddWithValue("@FormId", (object?)extras.FormId ?? DBNull.Value);
             ccCmd.Parameters.AddWithValue("@FormEntryId", (object?)extras.FormEntryId ?? DBNull.Value);
             AddNVarCharMax(ccCmd, "@FormData", extras.FormData);
+            ccCmd.Parameters.AddWithValue("@SenderEmail", (object?)extras.SenderEmail ?? DBNull.Value);
+            ccCmd.Parameters.AddWithValue("@CreatedByName", (object?)extras.CreatedByName ?? DBNull.Value);
             await ccCmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -512,7 +558,7 @@ INSERT INTO {targetTable}
 
         CONVERT(NVARCHAR(255), t.CreatedBy) AS transaction_createdBy,
 
-        cu.Email AS transaction_createdByEmail,
+        COALESCE(@SenderEmail, cu.Email) AS transaction_createdByEmail,
 
         CAST(t.ModifiedAt AS datetime) AS transaction_modifiedAt,
 
@@ -529,6 +575,8 @@ INSERT INTO {targetTable}
         @FormEntryId AS formEntryId,
 
         @FormData AS formData,
+
+        @CreatedByName AS createdByName,
 
         @Action AS [action]
 
@@ -646,6 +694,63 @@ DELETE FROM {completedTable} WHERE {keyPredicate};";
         cmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
         cmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<List<Guid>> CollectInstanceParticipantUserIdsAsync(
+        SqlConnection connection,
+        string workflowIdValue,
+        string workflowTableKey,
+        Guid workflowInstanceId,
+        string workflowInstanceIdStr,
+        string transactionTable,
+        string inboxTable,
+        string sentTable,
+        CancellationToken cancellationToken)
+    {
+        const string instancePredicate = """
+            (workflowId = @WorkflowIdValue OR workflowId = @WorkflowTableKey)
+            AND (
+                workflowInstanceId = @WorkflowInstanceIdStr
+                OR TRY_CONVERT(UNIQUEIDENTIFIER, workflowInstanceId) = @WorkflowInstanceId
+            )
+            """;
+
+        var sql = $"""
+SELECT DISTINCT UserGuid
+FROM (
+    SELECT TRY_CONVERT(UNIQUEIDENTIFIER, userId) AS UserGuid
+    FROM {inboxTable}
+    WHERE {instancePredicate}
+    UNION
+    SELECT TRY_CONVERT(UNIQUEIDENTIFIER, userId) AS UserGuid
+    FROM {sentTable}
+    WHERE {instancePredicate}
+    UNION
+    SELECT ActivityUserId AS UserGuid
+    FROM {transactionTable}
+    WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0
+    UNION
+    SELECT CreatedBy AS UserGuid
+    FROM {transactionTable}
+    WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0
+    UNION
+    SELECT ModifiedBy AS UserGuid
+    FROM {transactionTable}
+    WHERE WorkflowInstanceId = @WorkflowInstanceId AND IsDeleted = 0
+) p
+WHERE UserGuid IS NOT NULL AND UserGuid <> CAST(0x0 AS UNIQUEIDENTIFIER);
+""";
+
+        var ids = new List<Guid>();
+        await using var cmd = new SqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@WorkflowIdValue", workflowIdValue);
+        cmd.Parameters.AddWithValue("@WorkflowTableKey", workflowTableKey);
+        cmd.Parameters.AddWithValue("@WorkflowInstanceIdStr", workflowInstanceIdStr);
+        cmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            ids.Add(reader.GetGuid(0));
+        return ids;
     }
 
     /// <summary>Self-assign: remove sent row when the same user receives the instance back in inbox.</summary>
@@ -768,7 +873,58 @@ ORDER BY Id DESC;";
                 connection, formId!, entryId, cancellationToken);
         }
 
-        return new MailboxExtraData(repositoryId, itemId, formId, formEntryId, formData);
+        string? senderEmail = null;
+        string? createdByName = null;
+        var instanceContext = await LoadInstanceContextAsync(connection, suffix, workflowInstanceId, cancellationToken);
+        if (EmailIngestActorResolver.TryParseEmailIngestSender(
+                instanceContext,
+                out var parsedSenderEmail,
+                out _)
+            && !string.IsNullOrWhiteSpace(parsedSenderEmail))
+        {
+            senderEmail = parsedSenderEmail.Trim();
+            createdByName = senderEmail;
+        }
+
+        return new MailboxExtraData(repositoryId, itemId, formId, formEntryId, formData, senderEmail, createdByName);
+    }
+
+    private static async Task<string?> LoadInstanceContextAsync(
+        SqlConnection connection,
+        string suffix,
+        Guid workflowInstanceId,
+        CancellationToken cancellationToken)
+    {
+        var instancesTable = $"workflow.[WorkflowInstances_{suffix}]";
+        if (!await TableExistsAsync(connection, $"WorkflowInstances_{suffix}", cancellationToken))
+            return null;
+
+        var sql = $"""
+            SELECT TOP 1 Context
+            FROM {instancesTable}
+            WHERE Id = @WorkflowInstanceId;
+            """;
+
+        await using var cmd = new SqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@WorkflowInstanceId", workflowInstanceId);
+        var value = await cmd.ExecuteScalarAsync(cancellationToken);
+        return value is string s && !string.IsNullOrWhiteSpace(s) ? s : null;
+    }
+
+    private static async Task<bool> TableExistsAsync(
+        SqlConnection connection,
+        string tableName,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT 1
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = N'workflow' AND TABLE_NAME = @TableName;
+            """;
+        await using var cmd = new SqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@TableName", tableName);
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result != null && result != DBNull.Value;
     }
 
     // LoadFormDataJsonAsync moved to WorkflowEzfbFormDataLoader (correct wFormId + ezfb column resolution).

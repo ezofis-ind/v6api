@@ -120,13 +120,42 @@ WHERE itemId = @ItemId AND (isDeleted = 0 OR isDeleted IS NULL);";
                 var value = reader.IsDBNull(i)
                     ? string.Empty
                     : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? string.Empty;
-                writer.WriteString(name, value);
+                writer.WritePropertyName(name);
+                WriteFormFieldValue(writer, value);
             }
 
             writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static void WriteFormFieldValue(Utf8JsonWriter writer, string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            writer.WriteStringValue(value);
+            return;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length >= 2
+            && ((trimmed[0] == '[' && trimmed[^1] == ']')
+                || (trimmed[0] == '{' && trimmed[^1] == '}')))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                doc.RootElement.WriteTo(writer);
+                return;
+            }
+            catch (JsonException)
+            {
+                // stored value is not valid JSON — write as plain string
+            }
+        }
+
+        writer.WriteStringValue(value);
     }
 
     private static bool IsSystemColumn(string column) =>

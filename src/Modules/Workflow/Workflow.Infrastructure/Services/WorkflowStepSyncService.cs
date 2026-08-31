@@ -67,13 +67,14 @@ public sealed class WorkflowStepSyncService : IWorkflowStepSyncService
 
             var (assignedToUserId, approversJson) = ResolveAssignees(block.Settings?.Users);
             var actionsJson = BuildActionsJsonForBlock(block.Id, workflowJson.Rules);
+            var stepConfig = BuildStepConfigJson(block.Settings);
             var step = WorkflowStep.Create(
                 workflowId,
                 label!,
                 MapBlockTypeToStepType(block.Type),
                 order++,
                 description: null,
-                config: null,
+                config: stepConfig,
                 isRequired: !string.Equals(block.Type, "END", StringComparison.OrdinalIgnoreCase),
                 assignedToUserId: assignedToUserId,
                 assignedToRole: null,
@@ -330,5 +331,21 @@ END";
 
         var approversJson = JsonSerializer.Serialize(users);
         return (parsed[0], approversJson);
+    }
+
+    private static string? BuildStepConfigJson(WorkflowBlockSettingsDto? settings)
+    {
+        if (settings?.GeneratePDF != true)
+            return null;
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["generatePDF"] = true
+        };
+
+        if (settings.GeneratePDFFields is { Length: > 0 })
+            payload["generatePDFFields"] = settings.GeneratePDFFields;
+
+        return JsonSerializer.Serialize(payload);
     }
 }

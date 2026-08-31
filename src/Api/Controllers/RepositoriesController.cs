@@ -633,6 +633,111 @@ public sealed class RepositoriesController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Append related documents to the existing saved set (does not clear previous links).
+    /// Use when the item already has saved related files and the user adds more (e.g. 10 → 11).
+    /// </summary>
+    [HttpPost("/api/repositories/{id:guid}/items/{itemId:guid}/related-saved")]
+    [ProducesResponseType(typeof(RepositorySavedRelatedDocumentsResultDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AddSavedRelatedDocuments(
+        Guid id,
+        Guid itemId,
+        [FromBody] SaveRepositoryRelatedDocumentsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var tenantId = RequireTenantId();
+        if (await EnsureRepositoryAccessAsync(id, tenantId, RepositorySecurityPermissions.View, cancellationToken) is { } deniedRepo)
+            return deniedRepo;
+
+        try
+        {
+            var source = await _items.GetItemAsync(id, tenantId, itemId, cancellationToken);
+            if (source == null)
+                return NotFound();
+            if (await EnsureItemAccessAsync(id, tenantId, RepositorySecurityFieldMap.FromDetail(source), RepositorySecurityPermissions.View, cancellationToken) is { } deniedItem)
+                return deniedItem;
+
+            var result = await _relatedDocuments.AddSavedRelatedAsync(
+                id,
+                tenantId,
+                itemId,
+                request,
+                GetUserId(),
+                cancellationToken);
+            if (result == null)
+                return NotFound();
+
+            result = await ApplySavedRelatedDocumentsSecurityAsync(tenantId, result, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Soft-delete one saved related link for this item.
+    /// Prefer query <c>relatedRepositoryId</c> + <c>relatedItemId</c> (from GET data).
+    /// Optional path <c>linkId</c> when deleting a real link row id.
+    /// </summary>
+    [HttpDelete("/api/repositories/{id:guid}/items/{itemId:guid}/related-saved/{linkId:guid}")]
+    [HttpDelete("/api/repositories/{id:guid}/items/{itemId:guid}/related-saved")]
+    [ProducesResponseType(typeof(RepositorySavedRelatedDocumentsResultDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeleteSavedRelatedDocument(
+        Guid id,
+        Guid itemId,
+        Guid? linkId = null,
+        [FromQuery] Guid? relatedRepositoryId = null,
+        [FromQuery] Guid? relatedItemId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var tenantId = RequireTenantId();
+        if (await EnsureRepositoryAccessAsync(id, tenantId, RepositorySecurityPermissions.View, cancellationToken) is { } deniedRepo)
+            return deniedRepo;
+
+        if ((linkId is null || linkId == Guid.Empty)
+            && (relatedRepositoryId is null || relatedRepositoryId == Guid.Empty
+                || relatedItemId is null || relatedItemId == Guid.Empty))
+        {
+            return BadRequest(new
+            {
+                error = "Provide linkId in the path, or relatedRepositoryId + relatedItemId query params."
+            });
+        }
+
+        try
+        {
+            var source = await _items.GetItemAsync(id, tenantId, itemId, cancellationToken);
+            if (source == null)
+                return NotFound();
+            if (await EnsureItemAccessAsync(id, tenantId, RepositorySecurityFieldMap.FromDetail(source), RepositorySecurityPermissions.View, cancellationToken) is { } deniedItem)
+                return deniedItem;
+
+            var result = await _relatedDocuments.DeleteSavedRelatedAsync(
+                id,
+                tenantId,
+                itemId,
+                linkId,
+                relatedRepositoryId,
+                relatedItemId,
+                cancellationToken);
+            if (result == null)
+                return NotFound();
+
+            result = await ApplySavedRelatedDocumentsSecurityAsync(tenantId, result, cancellationToken);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
     private static IReadOnlyList<string>? ParseRelatedExactFields(string? field, string? fields)
     {
         var list = new List<string>();
@@ -970,6 +1075,8 @@ public sealed class RepositoriesController : ControllerBase
         [FromForm] int? transactionId,
         [FromForm] string? storageProviderCode,
         [FromForm] string? metadata,
+        [FromForm] string? ocrJson,
+        [FromForm] string? ocrText,
         CancellationToken cancellationToken = default)
     {
         if (file == null || file.Length == 0)
@@ -994,7 +1101,9 @@ public sealed class RepositoriesController : ControllerBase
                 transactionId,
                 storageProviderCode,
                 file.Length,
-                mergedMetadata);
+                mergedMetadata,
+                ocrJson,
+                ocrText);
 
             var result = await _archiveUpload.UploadItemAsync(id, tenantId, request, GetUserId(), cancellationToken);
             return CreatedAtAction(nameof(GetItem), new { id, itemId = result.ItemId }, result);
@@ -1403,6 +1512,7 @@ public sealed class RepositoriesController : ControllerBase
             ["Id"] = item.RelatedItemId.ToString("D"),
             ["FileName"] = item.FileName,
             ["FileType"] = item.FileType,
+            ["FilePath"] = item.FilePath,
             ["DocumentType"] = item.DocumentType,
             ["Supplier"] = item.Supplier,
             ["PoNumber"] = item.PoNumber,

@@ -17,6 +17,7 @@ public sealed class RepositoryFolderService : IRepositoryFolderService
         Guid tenantId,
         IReadOnlyDictionary<string, string> metadata,
         Guid? userId,
+        bool allowIncompleteFolderMetadata = false,
         CancellationToken cancellationToken = default)
     {
         var connectionString = _connectionProvider.ConnectionString
@@ -45,7 +46,7 @@ public sealed class RepositoryFolderService : IRepositoryFolderService
             var segmentName = RepositoryFolderMetadataResolver.ResolveSegmentName(metadata, field);
             if (string.IsNullOrWhiteSpace(segmentName))
             {
-                if (field.IsMandatory)
+                if (field.IsMandatory && !allowIncompleteFolderMetadata)
                 {
                     missing.Add($"{field.Name} (sql: {field.SqlColumnName}, level: {field.Level})");
                     continue;

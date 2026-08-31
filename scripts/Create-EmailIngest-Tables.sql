@@ -13,7 +13,7 @@ BEGIN
         MasterSource NVARCHAR(32) NOT NULL CONSTRAINT DF_EmailIngestMailbox_MasterSource DEFAULT (N'InternalForm'),
         MasterFormId NVARCHAR(128) NULL,
         MasterConnectorId UNIQUEIDENTIFIER NULL,
-        AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.tif,.tiff'),
+        AttachmentExtensions NVARCHAR(256) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Ext DEFAULT (N'.pdf,.tif,.tiff,.png,.jpg,.jpeg'),
         LastPolledAtUtc DATETIME2(3) NULL,
         LastError NVARCHAR(2000) NULL,
         CreatedAtUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EmailIngestMailbox_Created DEFAULT (SYSUTCDATETIME()),
