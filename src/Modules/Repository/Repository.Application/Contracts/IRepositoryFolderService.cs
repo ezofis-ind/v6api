@@ -14,6 +14,7 @@ public interface IRepositoryFolderService
         Guid tenantId,
         IReadOnlyDictionary<string, string> metadata,
         Guid? userId,
+        bool allowIncompleteFolderMetadata = false,
         CancellationToken cancellationToken = default);
 }
 

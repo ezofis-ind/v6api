@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using SaaSApp.Repository.Application;
 using SaaSApp.Workflow.Application.Contracts;
 using System.Data;
 
@@ -73,6 +74,7 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
 
         var attachmentId = Guid.NewGuid();
         var itemGuid = itemId ?? TryParseGuid(formJsonId);
+        var normalizedFileName = RepositoryFileNameHelper.EnsureExtension(fileName, contentType, filePath);
         var sql = $@"
             INSERT INTO {tableName}
             (Id, TenantId, WorkflowInstanceId, StepInstanceId, RepositoryId, ItemId, FormJsonId,
@@ -92,7 +94,7 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         command.Parameters.AddWithValue("@RepositoryId", (object?)repositoryId ?? DBNull.Value);
         command.Parameters.AddWithValue("@ItemId", (object?)itemGuid ?? DBNull.Value);
         command.Parameters.AddWithValue("@FormJsonId", (object?)(formJsonId ?? itemGuid?.ToString("N")) ?? DBNull.Value);
-        command.Parameters.AddWithValue("@FileName", fileName);
+        command.Parameters.AddWithValue("@FileName", normalizedFileName);
         command.Parameters.AddWithValue("@FilePath", filePath);
         command.Parameters.AddWithValue("@FileSize", (object?)fileSize ?? DBNull.Value);
         command.Parameters.AddWithValue("@ContentType", (object?)contentType ?? DBNull.Value);
@@ -184,7 +186,10 @@ public sealed class DynamicTableRepository : IDynamicTableRepository
         return new WorkflowAttachmentRowDto(
             Id: reader.GetGuid(reader.GetOrdinal("Id")),
             WorkflowInstanceId: reader.GetGuid(reader.GetOrdinal("WorkflowInstanceId")),
-            FileName: GetNullableString(reader, "FileName"),
+            FileName: RepositoryFileNameHelper.EnsureExtension(
+                GetNullableString(reader, "FileName"),
+                GetNullableString(reader, "ContentType"),
+                GetNullableString(reader, "FilePath")),
             FilePath: GetNullableString(reader, "FilePath"),
             FileSize: GetNullableInt64(reader, "FileSize"),
             ContentType: GetNullableString(reader, "ContentType"),

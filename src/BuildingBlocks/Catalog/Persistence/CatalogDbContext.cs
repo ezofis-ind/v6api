@@ -19,6 +19,10 @@ public sealed class CatalogDbContext : DbContext
     public DbSet<RepositoryItemShare> RepositoryItemShares => Set<RepositoryItemShare>();
     public DbSet<CreditMaster> CreditMasters => Set<CreditMaster>();
     public DbSet<ConnectorProvider> ConnectorProviders => Set<ConnectorProvider>();
+    public DbSet<Branding> Brandings => Set<Branding>();
+    public DbSet<FolderCreationDraft> FolderCreationDrafts => Set<FolderCreationDraft>();
+    public DbSet<UserCreationDraft> UserCreationDrafts => Set<UserCreationDraft>();
+    public DbSet<PortalJsonSnapshot> PortalJsonSnapshots => Set<PortalJsonSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -147,6 +151,59 @@ public sealed class CatalogDbContext : DbContext
             entity.Property(e => e.CreatedAtUtc);
             entity.Property(e => e.ModifiedAtUtc);
             entity.HasIndex(e => e.ProviderCode).IsUnique();
+        });
+
+        modelBuilder.Entity<Branding>(entity =>
+        {
+            entity.ToTable("Branding");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.UserEmail).HasMaxLength(256).IsRequired();
+            entity.Property(e => e.BrandingName).HasMaxLength(256).IsRequired();
+            entity.Property(e => e.BrandingJson).IsRequired();
+            entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.ModifiedAtUtc);
+            entity.Property(e => e.IsDeleted);
+            entity.HasIndex(e => e.BrandingName);
+            entity.HasIndex(e => new { e.TenantId, e.BrandingName });
+        });
+
+        modelBuilder.Entity<FolderCreationDraft>(entity =>
+        {
+            entity.ToTable("FolderCreationDrafts");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.CurrentStepKey).HasMaxLength(64).IsRequired();
+            entity.Property(e => e.DraftJson).IsRequired();
+            entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.ModifiedAtUtc);
+            entity.Property(e => e.IsCompleted);
+            entity.Property(e => e.IsDeleted);
+            entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsDeleted, e.IsCompleted });
+        });
+
+        modelBuilder.Entity<UserCreationDraft>(entity =>
+        {
+            entity.ToTable("UserCreationDrafts");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.CurrentStepKey).HasMaxLength(64).IsRequired();
+            entity.Property(e => e.DraftJson).IsRequired();
+            entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.ModifiedAtUtc);
+            entity.Property(e => e.IsCompleted);
+            entity.Property(e => e.IsDeleted);
+            entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsDeleted, e.IsCompleted });
+        });
+
+        modelBuilder.Entity<PortalJsonSnapshot>(entity =>
+        {
+            entity.ToTable("PortalJsonSnapshots");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Token).HasMaxLength(64).IsRequired();
+            entity.Property(e => e.PortalJson).IsRequired();
+            entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.ModifiedAtUtc);
+            entity.Property(e => e.IsDeleted);
+            entity.HasIndex(e => e.Token).IsUnique();
+            entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsDeleted });
         });
     }
 }

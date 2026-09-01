@@ -62,12 +62,13 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
 
         var agentTable = $"agentDataValidation_{suffix}";
         var agentJoin = await BuildAgentValidationApplyAsync(connection, agentTable, cancellationToken);
-        var dataSql = BuildListSql(tableFull, whereSql, agentJoin, latestOnlyPerInstance);
+        var currentStageJoin = BuildCurrentStageApply(transactionTable, transactionTableExists);
+        var dataSql = BuildListSql(tableFull, whereSql, agentJoin, currentStageJoin, latestOnlyPerInstance);
 
         if (request.SkipTotal)
         {
             var items = await ReadListPageAsync(connection, dataSql, parameters, offset, pageSize, cancellationToken);
-            await EnrichFormDataAsync(items, cancellationToken);
+            await EnrichMailboxRowsAsync(items, cancellationToken);
             return new LegacyMailboxListResult(items, -1, page, pageSize, TableExists: true);
         }
 
@@ -81,9 +82,39 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
         await Task.WhenAll(countTask, listTask);
 
         var pageItems = await listTask;
-        await EnrichFormDataAsync(pageItems, cancellationToken);
+        await EnrichMailboxRowsAsync(pageItems, cancellationToken);
 
         return new LegacyMailboxListResult(pageItems, await countTask, page, pageSize, TableExists: true);
+    }
+
+    private async Task EnrichMailboxRowsAsync(
+        IList<LegacyMailboxRowDto> items,
+        CancellationToken cancellationToken)
+    {
+        await EnrichFormDataAsync(items, cancellationToken);
+        EnrichEmailIngestSenderDisplay(items);
+    }
+
+    private static void EnrichEmailIngestSenderDisplay(IList<LegacyMailboxRowDto> items)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            var row = items[i];
+            if (!EmailIngestActorResolver.TryParseEmailIngestSender(
+                    row.Context,
+                    out var senderEmail,
+                    out _)
+                || string.IsNullOrWhiteSpace(senderEmail))
+            {
+                continue;
+            }
+
+            items[i] = row with
+            {
+                TransactionCreatedByEmail = senderEmail.Trim(),
+                CreatedByName = senderEmail.Trim()
+            };
+        }
     }
 
     private async Task EnrichFormDataAsync(IList<LegacyMailboxRowDto> items, CancellationToken cancellationToken)
@@ -91,8 +122,6 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
         for (var i = 0; i < items.Count; i++)
         {
             var row = items[i];
-            if (!string.IsNullOrWhiteSpace(row.FormData))
-                continue;
             if (string.IsNullOrWhiteSpace(row.FormId) || string.IsNullOrWhiteSpace(row.FormEntryId))
                 continue;
             if (!int.TryParse(row.FormEntryId, out var entryId) || entryId <= 0)
@@ -207,12 +236,12 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
         {
             if (transactionTableExists)
             {
-                // Narrow mailbox rows first (index on userId), then open transaction exists.
-                whereParts.Add(BuildMailboxUserMatchSql("m"));
+                // Inbox is only the current assignee (not the starter/CreatedBy of the next step).
+                whereParts.Add(BuildInboxMailboxUserMatchSql("m"));
                 whereParts.AddRange(BuildInboxOpenTransactionFilter(transactionTable));
             }
             else
-                whereParts.Add(BuildMailboxUserMatchSql("m"));
+                whereParts.Add(BuildInboxMailboxUserMatchSql("m"));
         }
         else
         {
@@ -236,7 +265,24 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
         return (string.Join(" AND ", whereParts), parameters);
     }
 
-    /// <summary>Assignee, creator, or group member — matches legacy inboxList visibility.</summary>
+    /// <summary>Inbox: current assignee (or group), not transaction CreatedBy.</summary>
+    private static string BuildInboxMailboxUserMatchSql(string alias) => $"""
+(
+    {alias}.userId = @CurrentUserId
+    OR (
+        {alias}.groupId IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM workflow.groupUser gu
+            WHERE gu.GroupId = {alias}.groupId
+              AND gu.UserId = @CurrentUserGuid
+              AND gu.IsDeleted = 0
+        )
+    )
+)
+""";
+
+    /// <summary>Sent/Completed: assignee, creator, or group member.</summary>
     private static string BuildMailboxUserMatchSql(string alias) => $"""
 (
     {alias}.userId = @CurrentUserId
@@ -247,6 +293,22 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
             SELECT 1
             FROM workflow.groupUser gu
             WHERE gu.GroupId = {alias}.groupId
+              AND gu.UserId = @CurrentUserGuid
+              AND gu.IsDeleted = 0
+        )
+    )
+)
+""";
+
+    private static string BuildInboxAssigneeMatchSql(string alias) => $"""
+(
+    {alias}.ActivityUserId = @CurrentUserGuid
+    OR (
+        {alias}.ActivityGroupId IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM workflow.groupUser gu
+            WHERE gu.GroupId = {alias}.ActivityGroupId
               AND gu.UserId = @CurrentUserGuid
               AND gu.IsDeleted = 0
         )
@@ -276,7 +338,7 @@ public sealed class WorkflowLegacyMailboxQueryService : IWorkflowLegacyMailboxQu
     private static IEnumerable<string> BuildInboxOpenTransactionFilter(string transactionTable)
     {
         const string instanceJoin = "TRY_CONVERT(UNIQUEIDENTIFIER, m.workflowInstanceId) = tx.WorkflowInstanceId";
-        var participantMatch = BuildTransactionParticipantMatchSql("tx");
+        var assigneeMatch = BuildInboxAssigneeMatchSql("tx");
         yield return $"""
 EXISTS (
     SELECT 1
@@ -285,7 +347,7 @@ EXISTS (
       AND tx.ActionStatus = 0
       AND UPPER(LTRIM(RTRIM(ISNULL(tx.StageType, N'')))) <> N'END'
       AND {instanceJoin}
-      AND {participantMatch}
+      AND {assigneeMatch}
 )
 """;
     }
@@ -294,7 +356,7 @@ EXISTS (
     private static string BuildSentExcludeOpenInboxForCurrentUserFilter(string transactionTable)
     {
         const string instanceJoin = "TRY_CONVERT(UNIQUEIDENTIFIER, m.workflowInstanceId) = tx_open.WorkflowInstanceId";
-        var assigneeMatch = BuildTransactionParticipantMatchSql("tx_open");
+        var assigneeMatch = BuildInboxAssigneeMatchSql("tx_open");
         return $"""
 NOT EXISTS (
     SELECT 1
@@ -379,17 +441,65 @@ FROM (
 WHERE ranked.mailbox_rn = 1;";
     }
 
-    private static string BuildListSql(string tableFull, string whereSql, string agentJoin, bool latestOnlyPerInstance)
+    private static string BuildCurrentStageApply(string transactionTable, bool transactionTableExists)
     {
+        if (!transactionTableExists)
+        {
+            return """
+OUTER APPLY (
+    SELECT
+        CAST(NULL AS NVARCHAR(255)) AS CurrentStageType,
+        CAST(NULL AS NVARCHAR(255)) AS CurrentStageName,
+        CAST(NULL AS NVARCHAR(255)) AS CurrentActivityUserEmail
+) cs
+""";
+        }
+
+        // Ticket current stage: open step first, else END, else latest transaction.
+        return $@"
+OUTER APPLY (
+    SELECT TOP 1
+        tx.StageType AS CurrentStageType,
+        tx.StageName AS CurrentStageName,
+        au.Email AS CurrentActivityUserEmail
+    FROM {transactionTable} tx
+    LEFT JOIN users.Users au ON au.Id = tx.ActivityUserId AND au.IsDeleted = 0
+    WHERE tx.IsDeleted = 0
+      AND tx.WorkflowInstanceId = TRY_CONVERT(UNIQUEIDENTIFIER, m.workflowInstanceId)
+    ORDER BY
+        CASE
+            WHEN tx.ActionStatus = 0 AND UPPER(LTRIM(RTRIM(ISNULL(tx.StageType, N'')))) <> N'END' THEN 0
+            WHEN UPPER(LTRIM(RTRIM(ISNULL(tx.StageType, N'')))) = N'END' THEN 1
+            ELSE 2
+        END,
+        tx.Id DESC
+) cs";
+    }
+
+    private static string BuildListSql(
+        string tableFull,
+        string whereSql,
+        string agentJoin,
+        string currentStageJoin,
+        bool latestOnlyPerInstance)
+    {
+        // stage/stageType always reflect the ticket's current stage (not the historical mailbox row stage).
         const string selectColumns = """
     m.id, m.userId, m.groupId, m.workflowId, m.name, m.workflowInstanceId, m.referenceNumber, m.createdAtUtc, m.startedAtUtc, m.completedAtUtc, m.context,
-    m.transactionId, m.activityId, m.ruleId, m.stageType, m.stage, m.review,
+    m.transactionId, m.activityId, m.ruleId,
+    COALESCE(cs.CurrentStageType, m.stageType) AS stageType,
+    COALESCE(cs.CurrentStageName, m.stage) AS stage,
+    m.review,
     m.transaction_createdAt, m.transaction_createdBy, m.transaction_createdByEmail,
     m.transaction_modifiedAt, m.transaction_modifiedBy,
     m.repositoryId, m.itemId, m.formId, m.formEntryId, m.formData,
     m.mlPrediction, m.mlCondition, m.userType, m.createdByName,
-    m.lastActionStageType, m.lastActionStageName, m.lastAction,
-    m.commentsCount, m.attachmentCount, m.activityUserEmail, m.activityGroupName,
+    ISNULL(m.lastActionStageType, m.stageType) AS lastActionStageType,
+    ISNULL(m.lastActionStageName, m.stage) AS lastActionStageName,
+    m.lastAction,
+    m.commentsCount, m.attachmentCount,
+    COALESCE(cs.CurrentActivityUserEmail, m.activityUserEmail) AS activityUserEmail,
+    m.activityGroupName,
     av.AgentValidationWorkflowId,
     ISNULL(av.AgentResponse, N'') AS AgentResponse,
     ISNULL(av.AgentHtmlResponse, N'') AS AgentHtml,
@@ -402,6 +512,7 @@ WHERE ranked.mailbox_rn = 1;";
 SELECT
 {selectColumns}
 FROM {tableFull} m
+{currentStageJoin}
 {agentJoin}
 WHERE {whereSql}
 ORDER BY m.transaction_createdAt DESC, m.id DESC
@@ -428,6 +539,7 @@ page_rows AS (
 SELECT
 {selectColumns}
 FROM page_rows m
+{currentStageJoin}
 {agentJoin}
 ORDER BY m.transaction_createdAt DESC, m.id DESC;";
     }

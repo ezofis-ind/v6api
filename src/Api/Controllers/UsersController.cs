@@ -146,21 +146,23 @@ public sealed class UsersController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>List all users in the current tenant (excluding soft-deleted and the tenant pilot service account).</summary>
+    /// <summary>List tenant members (excludes soft-deleted, pilot account, and External sign/share guests).</summary>
     [HttpGet]
     [ProducesResponseType(typeof(ListUsersQueryResult), StatusCodes.Status200OK)]
     public async Task<IActionResult> List(CancellationToken cancellationToken)
     {
         var result = await _mediator.Send(new ListUsersQuery(), cancellationToken);
         var pilotEmail = _pilotUserOptions.Email?.Trim();
-        if (string.IsNullOrWhiteSpace(pilotEmail))
-            return Ok(result);
-
         var filtered = result.Items
-            .Where(u => !string.Equals(u.Email, pilotEmail, StringComparison.OrdinalIgnoreCase))
+            .Where(u => !IsExternalUserType(u.UserType)
+                && (string.IsNullOrWhiteSpace(pilotEmail)
+                    || !string.Equals(u.Email, pilotEmail, StringComparison.OrdinalIgnoreCase)))
             .ToList();
         return Ok(new ListUsersQueryResult(filtered));
     }
+
+    private static bool IsExternalUserType(string? userType) =>
+        string.Equals(userType, SaaSApp.Users.Domain.Entities.User.UserTypeExternal, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>List permission categories (key + name) for the role Permissions tab. Admin only.</summary>
     [HttpGet("roles/permissions")]

@@ -77,6 +77,11 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IConnectorProviderAdapter, QuickBooksConnectorAdapter>();
         services.AddScoped<IConnectorOAuthService, ConnectorOAuthService>();
         services.AddScoped<IEmailIngestService, EmailIngestService>();
+        services.AddScoped<EmailIngestActorResolver>();
+        services.AddScoped<IEmailIngestNormalWorkflowStarter, EmailIngestNormalWorkflowStarter>();
+        services.AddScoped<OcrToFormDataMapper>();
+        services.AddScoped<WorkflowPdfFormDataMapper>();
+        services.AddScoped<StagedFileEzfbBinder>();
         services.AddScoped<IWorkflowEmailIngestLinker, WorkflowEmailIngestLinker>();
         services.AddScoped<IMasterResolveService, MasterResolveService>();
         services.AddScoped<RunEmailIngestPollJob>();
@@ -105,6 +110,13 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IWorkflowStartBootstrapService, WorkflowStartBootstrapService>();
         services.AddScoped<IWorkflowApAgentMoveNextService, WorkflowApAgentMoveNextService>();
         services.AddScoped<IWorkflowEzfbFormDataLoader, WorkflowEzfbFormDataLoader>();
+        services.AddHttpClient(nameof(WorkflowPdfGenerationService), (sp, client) =>
+        {
+            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkflowPdfGenerationOptions>>().Value;
+            var seconds = Math.Clamp(opts.TimeoutSeconds, 5, 600);
+            client.Timeout = TimeSpan.FromSeconds(seconds);
+        });
+        services.AddScoped<IWorkflowPdfGenerationService, WorkflowPdfGenerationService>();
         services.AddScoped<IApAgentJobProgressService, ApAgentJobProgressService>();
         services.AddScoped<IApAgentJobStatusService, ApAgentJobStatusService>();
         services.Configure<FormMasterFileImportOptions>(configuration.GetSection(FormMasterFileImportOptions.SectionName));
@@ -119,6 +131,7 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
         services.AddScoped<IMasterFileImportPythonJobClient, MasterFileImportPythonJobClient>();
         services.AddScoped<RunMasterFileImportPythonJob>();
         services.Configure<ApAgentOptions>(configuration.GetSection(ApAgentOptions.SectionName));
+        services.Configure<WorkflowPdfGenerationOptions>(configuration.GetSection(WorkflowPdfGenerationOptions.SectionName));
         services.Configure<EmailIngestOptions>(configuration.GetSection(EmailIngestOptions.SectionName));
         services.AddHttpClient(nameof(ApAgentPythonPipelineService), client =>
         {

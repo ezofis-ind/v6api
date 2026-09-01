@@ -8,12 +8,13 @@ public sealed record UploadIndexUploadResult(
     string FileId,
     IReadOnlyList<UploadIndexFieldDto>? OcrFieldList = null);
 
-/// <summary>uploadForOcr response — raw OCR JSON + parsed fields (no staging).</summary>
+/// <summary>uploadForOcr response — raw OCR JSON + parsed fields + full document text (no staging).</summary>
 public sealed record UploadForOcrResult(
     string OcrJson,
-    IReadOnlyList<UploadIndexFieldDto>? OcrFieldList);
+    IReadOnlyList<UploadIndexFieldDto>? OcrFieldList,
+    string? OcrText = null);
 
-/// <summary>uploadWithOcr — staged file + OCR metadata (pre-ticket).</summary>
+/// <summary>uploadWithOcr — staged file + caller-provided OCR metadata (pre-ticket).</summary>
 public sealed record UploadWithOcrResult(
     string FileId,
     Guid RepositoryId,

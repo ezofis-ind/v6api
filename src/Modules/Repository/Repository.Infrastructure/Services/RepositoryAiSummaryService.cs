@@ -1,4 +1,6 @@
+using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -80,11 +82,12 @@ public sealed class RepositoryAiSummaryService : IRepositoryAiSummaryService
             throw new HttpRequestException("Repository:AiSummary:ApiUrl is not configured.");
 
         _logger.LogInformation(
-            "Calling AI summary API {Url} for tenant {TenantId}, repository {RepositoryId}, item {ItemId}",
+            "Calling AI summary API {Url} for tenant {TenantId}, repository {RepositoryId}, item {ItemId}, filepath {FilePath}",
             apiUrl,
             tenantId,
             repositoryId,
-            itemId);
+            itemId,
+            filePath);
 
         using var response = await _httpClient.PostAsJsonAsync(
             apiUrl,

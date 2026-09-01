@@ -125,6 +125,31 @@ public interface IRepositoryRelatedDocumentsService
         SaveRepositoryRelatedDocumentsRequest request,
         Guid? userId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Append related docs to the existing saved set (does not clear previous links).
+    /// Skips pairs that are already linked.
+    /// </summary>
+    Task<RepositorySavedRelatedDocumentsResultDto?> AddSavedRelatedAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        Guid itemId,
+        SaveRepositoryRelatedDocumentsRequest request,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Soft-delete one saved related link. Prefer <paramref name="relatedRepositoryId"/> +
+    /// <paramref name="relatedItemId"/>; optional <paramref name="linkId"/> when known.
+    /// </summary>
+    Task<RepositorySavedRelatedDocumentsResultDto?> DeleteSavedRelatedAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        Guid itemId,
+        Guid? linkId = null,
+        Guid? relatedRepositoryId = null,
+        Guid? relatedItemId = null,
+        CancellationToken cancellationToken = default);
 }
 
 public interface IRepositoryFileUploadService

@@ -29,6 +29,7 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
     private readonly IWorkflowApAgentMoveNextService _apAgentMoveNext;
     private readonly IWorkflowEzfbFormDataLoader _ezfbFormDataLoader;
     private readonly IWorkflowAttachmentArchiveService? _attachmentArchive;
+    private readonly StagedFileEzfbBinder _stagedFileEzfbBinder;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WorkflowStartBootstrapService> _logger;
 
@@ -42,6 +43,7 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
         IWorkflowEzfbFormDataLoader ezfbFormDataLoader,
         IConfiguration configuration,
         ILogger<WorkflowStartBootstrapService> logger,
+        StagedFileEzfbBinder stagedFileEzfbBinder,
         IWorkflowStartAttachmentUploader? attachmentUploader = null,
         IWorkflowAttachmentArchiveService? attachmentArchive = null)
     {
@@ -54,6 +56,7 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
         _ezfbFormDataLoader = ezfbFormDataLoader;
         _configuration = configuration;
         _logger = logger;
+        _stagedFileEzfbBinder = stagedFileEzfbBinder;
         _attachmentUploader = attachmentUploader;
         _attachmentArchive = attachmentArchive;
     }
@@ -346,6 +349,7 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
 
         Guid? repositoryItemId = null;
         string? blobPath = null;
+        var archivedStagedFiles = new List<(StartWorkflowStagedFileRef Staged, Guid ItemId)>();
 
         if (_attachmentArchive != null && request.StagedFiles is { Count: > 0 })
         {
@@ -359,12 +363,37 @@ public sealed class WorkflowStartBootstrapService : IWorkflowStartBootstrapServi
                     staged.FileId,
                     currentTransactionId,
                     userId,
+                    allowIncompleteFolderMetadata: true,
                     cancellationToken);
                 if (archived != null)
                 {
+                    archivedStagedFiles.Add((staged, archived.ItemId));
                     repositoryItemId ??= archived.ItemId;
                     blobPath ??= archived.FilePath;
                 }
+            }
+        }
+
+        if (archivedStagedFiles.Count > 0)
+        {
+            await _stagedFileEzfbBinder.BindAsync(
+                connectionString,
+                workflow.FormId,
+                formEntryItemId,
+                archivedStagedFiles,
+                cancellationToken);
+
+            var refreshedMailboxForm = await BuildMailboxFormSnapshotAsync(
+                workflow.FormId,
+                formEntryItemId,
+                cancellationToken);
+            if (refreshedMailboxForm != null)
+            {
+                await _legacyMailboxSync.PropagateInstanceFormDataAsync(
+                    workflow.Id,
+                    instance.Id,
+                    refreshedMailboxForm,
+                    cancellationToken);
             }
         }
 

@@ -88,37 +88,55 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
         }
 
         var events = new List<RepositoryItemTimelineEventDto>();
+        var workflowEvents = new List<RepositoryItemTimelineEventDto>();
+        string? workflowActorName = null;
+        if (linkedInstanceId is Guid instanceId)
+        {
+            var workflowHistory = await LoadWorkflowHistoryEventsAsync(connection, instanceId, cancellationToken);
+            workflowEvents.AddRange(workflowHistory.Events);
+            linkedWorkflowId = workflowHistory.WorkflowId;
+            linkedReference = workflowHistory.ReferenceNumber ?? workflowHistory.WorkflowName;
+            workflowActorName = FormatWorkflowInstanceActor(workflowHistory.WorkflowName, workflowHistory.ReferenceNumber);
+        }
+
         if (fields != null)
-            events.AddRange(RepositoryItemTimelineDeriver.Derive(fields, createdByName));
+            events.AddRange(RepositoryItemTimelineDeriver.Derive(fields, createdByName, workflowActorName));
 
         events.AddRange(stored);
 
-        if (linkedInstanceId is Guid instanceId)
-        {
-            var workflowEvents = await LoadWorkflowHistoryEventsAsync(connection, instanceId, cancellationToken);
-            events.AddRange(workflowEvents.Events);
-            linkedWorkflowId = workflowEvents.WorkflowId;
-            linkedReference = workflowEvents.ReferenceNumber;
-        }
-
+        // Keep sign-request / comments / ingest on the repository timeline only.
         events.AddRange(await LoadSignRequestTimelineEventsAsync(
             connection, repositoryId, tenantId, itemId, cancellationToken));
 
         events.AddRange(await LoadCommentTimelineEventsAsync(
             connection, repositoryId, tenantId, itemId, cancellationToken));
 
-        events = await ResolveActorNamesAsync(connection, events, cancellationToken);
-        events = events
+        var repoOnly = events
+            .Where(e => !string.Equals(e.EventType, "workflow", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        workflowEvents.AddRange(events.Where(e =>
+            string.Equals(e.EventType, "workflow", StringComparison.OrdinalIgnoreCase)));
+
+        repoOnly = await ResolveActorNamesAsync(connection, repoOnly, cancellationToken);
+        repoOnly = repoOnly
+            .OrderBy(e => e.CreatedAtUtc)
+            .ThenBy(e => e.Title, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        workflowEvents = await ResolveActorNamesAsync(connection, workflowEvents, cancellationToken);
+        workflowEvents = workflowEvents
             .OrderBy(e => e.CreatedAtUtc)
             .ThenBy(e => e.Title, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         return new RepositoryItemTimelineResultDto(
-            events,
-            events.Count,
+            repoOnly,
+            repoOnly.Count,
             linkedInstanceId,
             linkedWorkflowId,
-            linkedReference);
+            linkedReference,
+            workflowEvents,
+            workflowEvents.Count);
     }
 
     public async Task<RepositoryItemTimelineEventDto?> AddTimelineEventAsync(
@@ -426,13 +444,22 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
         return map;
     }
 
-    private static async Task<(IReadOnlyList<RepositoryItemTimelineEventDto> Events, Guid? WorkflowId, string? ReferenceNumber)> LoadWorkflowHistoryEventsAsync(
+    private static string? FormatWorkflowInstanceActor(string? workflowName, string? instanceName)
+    {
+        var name = string.IsNullOrWhiteSpace(workflowName) ? null : workflowName.Trim();
+        var instance = string.IsNullOrWhiteSpace(instanceName) ? null : instanceName.Trim();
+        if (name != null && instance != null && !string.Equals(name, instance, StringComparison.OrdinalIgnoreCase))
+            return $"{name} - {instance}";
+        return name ?? instance;
+    }
+
+    private static async Task<(IReadOnlyList<RepositoryItemTimelineEventDto> Events, Guid? WorkflowId, string? ReferenceNumber, string? WorkflowName)> LoadWorkflowHistoryEventsAsync(
         SqlConnection connection,
         Guid workflowInstanceId,
         CancellationToken cancellationToken)
     {
         if (!await WorkflowTableExistsAsync(connection, "WorkflowInstanceLookup", cancellationToken))
-            return (Array.Empty<RepositoryItemTimelineEventDto>(), null, null);
+            return (Array.Empty<RepositoryItemTimelineEventDto>(), null, null, null);
 
         Guid? workflowId = null;
         string? referenceNumber = null;
@@ -447,9 +474,24 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
             lookupCmd.Parameters.AddWithValue("@InstanceId", workflowInstanceId);
             await using var lookupReader = await lookupCmd.ExecuteReaderAsync(cancellationToken);
             if (!await lookupReader.ReadAsync(cancellationToken))
-                return (Array.Empty<RepositoryItemTimelineEventDto>(), null, null);
+                return (Array.Empty<RepositoryItemTimelineEventDto>(), null, null, null);
             workflowId = lookupReader.GetGuid(0);
             workflowName = lookupReader.IsDBNull(1) ? null : lookupReader.GetString(1);
+        }
+
+        if (workflowId is Guid wfId
+            && await WorkflowTableExistsAsync(connection, "Workflows", cancellationToken))
+        {
+            const string nameSql = """
+                SELECT TOP 1 Name
+                FROM workflow.Workflows
+                WHERE Id = @WorkflowId AND IsDeleted = 0;
+                """;
+            await using var nameCmd = new SqlCommand(nameSql, connection);
+            nameCmd.Parameters.AddWithValue("@WorkflowId", wfId);
+            var nameObj = await nameCmd.ExecuteScalarAsync(cancellationToken);
+            if (nameObj is string catalogName && !string.IsNullOrWhiteSpace(catalogName))
+                workflowName = catalogName.Trim();
         }
 
         var suffix = workflowId.Value.ToString("N")[..8];
@@ -468,10 +510,9 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
                 referenceNumber = s.Trim();
         }
 
-        referenceNumber ??= workflowName;
         var txTable = $"transaction_{suffix}";
         if (!await WorkflowTableExistsAsync(connection, txTable, cancellationToken))
-            return (Array.Empty<RepositoryItemTimelineEventDto>(), workflowId, referenceNumber);
+            return (Array.Empty<RepositoryItemTimelineEventDto>(), workflowId, referenceNumber, workflowName);
 
         var sql = $"""
             SELECT Id, StageName, StageType, Review, ActionStatus, ActivityUserId, CreatedBy, ModifiedBy, CreatedAt, ModifiedAt
@@ -562,7 +603,7 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
                 IsDerived: true));
         }
 
-        return (events, workflowId, referenceNumber);
+        return (events, workflowId, referenceNumber, workflowName);
     }
 
     private static async Task<IReadOnlyList<RepositoryItemTimelineEventDto>> LoadSignRequestTimelineEventsAsync(
@@ -654,23 +695,33 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
                 }
             }
 
-            var signerSummary = signers.Count == 0
-                ? "No signers"
-                : string.Join(", ", signers.Select(s =>
-                    $"{s.Email} ({s.Status})"));
+            // Sign-by-me (not shared): sole signer is the initiator — show only "Document signed",
+            // not "Sign request sent" / "Sign request completed".
+            var initiatorEmail = req.InitiatedByEmail?.Trim() ?? string.Empty;
+            var isSelfSignOnly = signers.Count == 1
+                && !string.IsNullOrWhiteSpace(initiatorEmail)
+                && string.Equals(signers[0].Email?.Trim(), initiatorEmail, StringComparison.OrdinalIgnoreCase);
 
-            var sendDescription =
-                $"Status: {req.Status}. Mode: {req.Mode}. Signers: {signerSummary}";
+            if (!isSelfSignOnly)
+            {
+                var signerSummary = signers.Count == 0
+                    ? "No signers"
+                    : string.Join(", ", signers.Select(s =>
+                        $"{s.Email} ({s.Status})"));
 
-            events.Add(new RepositoryItemTimelineEventDto(
-                Guid.Empty,
-                "sign",
-                "Sign request sent",
-                sendDescription,
-                "User",
-                string.IsNullOrWhiteSpace(req.InitiatedByEmail) ? req.InitiatedByName : req.InitiatedByEmail,
-                req.CreatedAtUtc,
-                IsDerived: true));
+                var sendDescription =
+                    $"Status: {req.Status}. Mode: {req.Mode}. Signers: {signerSummary}";
+
+                events.Add(new RepositoryItemTimelineEventDto(
+                    Guid.Empty,
+                    "sign",
+                    "Sign request sent",
+                    sendDescription,
+                    "User",
+                    string.IsNullOrWhiteSpace(req.InitiatedByEmail) ? req.InitiatedByName : req.InitiatedByEmail,
+                    req.CreatedAtUtc,
+                    IsDerived: true));
+            }
 
             foreach (var signer in signers)
             {
@@ -680,7 +731,9 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
                         Guid.Empty,
                         "sign",
                         "Document signed",
-                        $"Status: Signed. Sign request: {req.Status}",
+                        isSelfSignOnly
+                            ? "Status: Signed"
+                            : $"Status: Signed. Sign request: {req.Status}",
                         "User",
                         signer.Email,
                         signedAt,
@@ -690,8 +743,12 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
                 {
                     var when = signer.ModifiedAtUtc ?? req.ModifiedAtUtc ?? req.CreatedAtUtc;
                     var reason = string.IsNullOrWhiteSpace(signer.DeclineReason)
-                        ? $"Status: Declined. Sign request: {req.Status}"
-                        : $"Status: Declined. Reason: {signer.DeclineReason.Trim()}. Sign request: {req.Status}";
+                        ? (isSelfSignOnly
+                            ? "Status: Declined"
+                            : $"Status: Declined. Sign request: {req.Status}")
+                        : (isSelfSignOnly
+                            ? $"Status: Declined. Reason: {signer.DeclineReason.Trim()}"
+                            : $"Status: Declined. Reason: {signer.DeclineReason.Trim()}. Sign request: {req.Status}");
                     events.Add(new RepositoryItemTimelineEventDto(
                         Guid.Empty,
                         "sign",
@@ -702,7 +759,8 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
                         when,
                         IsDerived: true));
                 }
-                else if (string.Equals(signer.Status, SignRequestSignerStatuses.Pending, StringComparison.OrdinalIgnoreCase)
+                else if (!isSelfSignOnly
+                         && string.Equals(signer.Status, SignRequestSignerStatuses.Pending, StringComparison.OrdinalIgnoreCase)
                          && string.Equals(req.Status, SignRequestStatuses.InProgress, StringComparison.OrdinalIgnoreCase)
                          && signer.InvitedAtUtc is DateTime invitedAt
                          && invitedAt > req.CreatedAtUtc.AddSeconds(2))
@@ -720,7 +778,8 @@ public sealed class RepositoryItemActivityService : IRepositoryItemActivityServi
                 }
             }
 
-            if (string.Equals(req.Status, SignRequestStatuses.Completed, StringComparison.OrdinalIgnoreCase)
+            if (!isSelfSignOnly
+                && string.Equals(req.Status, SignRequestStatuses.Completed, StringComparison.OrdinalIgnoreCase)
                 && req.CompletedAtUtc is DateTime completedAt)
             {
                 events.Add(new RepositoryItemTimelineEventDto(

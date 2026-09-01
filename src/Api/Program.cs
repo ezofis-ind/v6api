@@ -53,6 +53,12 @@ builder.Services.AddMultiTenancy();
 builder.Services.AddCatalog(builder.Configuration);
 builder.Services.AddScoped<IPlaygroundApiKeyService, PlaygroundApiKeyService>();
 builder.Services.AddScoped<ITenantSignupService, TenantSignupService>();
+builder.Services.Configure<BrandingOptions>(builder.Configuration.GetSection(BrandingOptions.SectionName));
+builder.Services.AddSingleton<IBrandingCryptoService, BrandingCryptoService>();
+builder.Services.AddScoped<IBrandingService, BrandingService>();
+builder.Services.AddScoped<IFolderCreationDraftService, FolderCreationDraftService>();
+builder.Services.AddScoped<IUserCreationDraftService, UserCreationDraftService>();
+builder.Services.AddScoped<IPortalJsonService, PortalJsonService>();
 builder.Services.Configure<TenantPilotUserOptions>(
     builder.Configuration.GetSection(TenantPilotUserOptions.SectionName));
 builder.Services.Configure<TenantDefaultCreditOptions>(
@@ -336,8 +342,8 @@ if (hangfireEnabled)
     var emailIngestHangfire = app.Configuration.GetValue("EmailIngest:HangfireEnabled", true);
     if (emailIngestHangfire)
     {
-        var cron = app.Configuration.GetValue("EmailIngest:HangfireCron", "*/5 * * * *")
-                   ?? "*/5 * * * *";
+        var cron = app.Configuration.GetValue("EmailIngest:HangfireCron", "*/30 * * * * *")
+                   ?? "*/30 * * * * *";
         RecurringJob.AddOrUpdate<RunEmailIngestPollJob>(
             "email-ingest-poll",
             job => job.Execute(null),

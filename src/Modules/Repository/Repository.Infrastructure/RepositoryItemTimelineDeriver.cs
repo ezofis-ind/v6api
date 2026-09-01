@@ -7,7 +7,8 @@ internal static class RepositoryItemTimelineDeriver
 {
     public static IReadOnlyList<RepositoryItemTimelineEventDto> Derive(
         IReadOnlyDictionary<string, object?> fields,
-        string? createdByDisplayName = null)
+        string? createdByDisplayName = null,
+        string? workflowActorName = null)
     {
         var events = new List<RepositoryItemTimelineEventDto>();
 
@@ -25,6 +26,10 @@ internal static class RepositoryItemTimelineDeriver
                 IsDerived: true));
         }
 
+        var apAgentActor = string.IsNullOrWhiteSpace(workflowActorName)
+            ? "AP Agent"
+            : $"AP Agent - {workflowActorName.Trim()}";
+
         if (TryGetByte(fields, "OcrScore", out var ocrScore) && TryGetDate(fields, "CreatedAtUtc", out var ocrAt))
         {
             events.Add(new RepositoryItemTimelineEventDto(
@@ -32,8 +37,8 @@ internal static class RepositoryItemTimelineDeriver
                 "ai",
                 $"OCR extraction complete — {ocrScore}% confidence",
                 null,
-                "AI Engine",
-                "AI Engine",
+                "AP Agent",
+                apAgentActor,
                 ocrAt.AddMinutes(1),
                 IsDerived: true));
         }
@@ -50,8 +55,8 @@ internal static class RepositoryItemTimelineDeriver
                 "ai",
                 detail,
                 null,
-                "AI Engine",
-                "AI Engine",
+                "AP Agent",
+                apAgentActor,
                 aiAt.AddMinutes(2),
                 IsDerived: true));
         }
@@ -61,7 +66,7 @@ internal static class RepositoryItemTimelineDeriver
         {
             events.Add(new RepositoryItemTimelineEventDto(
                 Guid.Empty,
-                "system",
+                "workflow",
                 "File linked to workflow instance",
                 instanceId.ToString("D"),
                 "System",

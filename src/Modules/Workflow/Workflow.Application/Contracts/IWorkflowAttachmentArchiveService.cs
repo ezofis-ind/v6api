@@ -17,7 +17,8 @@ public interface IWorkflowAttachmentArchiveService
         string? metadataJson,
         int? transactionId,
         Guid userId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool allowIncompleteFolderMetadata = false);
 
     /// <summary>Promote a pre-ticket staged fileId into archive + WorkflowAttachments + processAddon.</summary>
     Task<WorkflowAttachmentArchiveResult?> PromoteFromStageAsync(
@@ -28,6 +29,7 @@ public interface IWorkflowAttachmentArchiveService
         Guid stageId,
         int? transactionId,
         Guid userId,
+        bool allowIncompleteFolderMetadata = false,
         CancellationToken cancellationToken = default);
 }
 

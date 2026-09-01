@@ -40,7 +40,8 @@ public sealed class WorkflowAttachmentArchiveService : IWorkflowAttachmentArchiv
         string? metadataJson,
         int? transactionId,
         Guid userId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool allowIncompleteFolderMetadata = false)
     {
         var request = new RepositoryUploadItemRequest(
             fileStream,
@@ -52,7 +53,8 @@ public sealed class WorkflowAttachmentArchiveService : IWorkflowAttachmentArchiv
             transactionId,
             StorageProviderCode: null,
             fileSize,
-            metadataJson);
+            metadataJson,
+            AllowIncompleteFolderMetadata: allowIncompleteFolderMetadata);
 
         var upload = await _archiveUpload.UploadItemAsync(
             repositoryId,
@@ -84,6 +86,7 @@ public sealed class WorkflowAttachmentArchiveService : IWorkflowAttachmentArchiv
             upload.FileName,
             transactionId,
             userId,
+            contentType,
             cancellationToken);
 
         return new WorkflowAttachmentArchiveResult(
@@ -109,9 +112,16 @@ public sealed class WorkflowAttachmentArchiveService : IWorkflowAttachmentArchiv
         Guid stageId,
         int? transactionId,
         Guid userId,
+        bool allowIncompleteFolderMetadata = false,
         CancellationToken cancellationToken = default)
     {
-        var promoted = await _uploadIndex.PromoteStageAsync(stageId, repositoryId, tenantId, userId, cancellationToken);
+        var promoted = await _uploadIndex.PromoteStageAsync(
+            stageId,
+            repositoryId,
+            tenantId,
+            userId,
+            allowIncompleteFolderMetadata,
+            cancellationToken);
         if (promoted == null)
             return null;
 
@@ -136,6 +146,7 @@ public sealed class WorkflowAttachmentArchiveService : IWorkflowAttachmentArchiv
             promoted.FileName,
             transactionId,
             userId,
+            promoted.ContentType,
             cancellationToken);
 
         return new WorkflowAttachmentArchiveResult(

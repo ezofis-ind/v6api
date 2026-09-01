@@ -38,14 +38,17 @@ public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvision
         {
             // Prior share/sign guests may have been saved with Configuration=0 and would hit onboard.
             // Only auto-complete for incomplete guests (no password / social yet), not full onboard users.
-            if (existing.Configuration == 0
-                && string.IsNullOrEmpty(existing.PasswordHash)
-                && ResolveSocialProvider(existing) == null)
-            {
+            var isIncompleteGuest = string.IsNullOrEmpty(existing.PasswordHash)
+                && ResolveSocialProvider(existing) == null;
+            if (existing.Configuration == 0 && isIncompleteGuest)
                 existing.MarkConfigurationCompleted();
-                await context.SaveChangesAsync(cancellationToken);
-            }
 
+            // Mark invite-only guests as External so they are hidden from GET /users.
+            // Do not change real tenant members who already have a password/social login.
+            if (isIncompleteGuest && string.IsNullOrWhiteSpace(existing.UserType))
+                existing.Update(userType: User.UserTypeExternal);
+
+            await context.SaveChangesAsync(cancellationToken);
             await _userTenantRegistry.AddOrUpdateAsync(normalizedEmail, tenantId, existing.Role, existing.Id, cancellationToken);
             return existing.Id;
         }
@@ -56,7 +59,8 @@ public sealed class ShareGuestUserProvisioningService : IShareGuestUserProvision
             normalizedEmail,
             displayName,
             User.RoleTenantUser,
-            authStrategy: User.AuthStrategyEzofis);
+            authStrategy: User.AuthStrategyEzofis,
+            userType: User.UserTypeExternal);
         user.SetLoginType("EZOFIS");
         // Invite guests skip tenant onboarding wizard (Configuration=0 would send them to onboard).
         user.MarkConfigurationCompleted();

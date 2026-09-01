@@ -79,7 +79,10 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
 
         var existing = await _emailIngest.GetMailboxByWorkflowIdAsync(workflowId, cancellationToken);
 
-        var connectorId = ResolveConnectorId(options, json);
+        var startBlock = GetStartBlock(json);
+        var mergedOptions = MergeOptionsFromStartBlock(options, startBlock);
+
+        var connectorId = ResolveConnectorId(mergedOptions, json, startBlock);
         if (connectorId == null || connectorId == Guid.Empty)
         {
             // Connector is optional at create/update — workflow can be saved; link mailbox later when OAuth Guid is set.
@@ -98,27 +101,31 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
         if (code is not ("GMAIL" or "OUTLOOK"))
             throw new InvalidOperationException("emailConnectorId must be a GMAIL or OUTLOOK connector.");
 
-        var masterSource = options?.MasterSource
+        var queryFilter = mergedOptions?.EmailQueryFilter
+            ?? existing?.QueryFilter
+            ?? BuildQueryFilterFromStartBlock(startBlock);
+
+        var masterSource = mergedOptions?.MasterSource
             ?? existing?.MasterSource
-            ?? (options?.MasterConnectorId != null
+            ?? (mergedOptions?.MasterConnectorId != null
                 ? EmailIngestMasterSources.QuickBooks
                 : EmailIngestMasterSources.InternalForm);
 
-        var masterFormId = options?.MasterFormId
+        var masterFormId = mergedOptions?.MasterFormId
             ?? existing?.MasterFormId
             ?? ResolveMasterFormIdFromWorkflow(json);
 
         var upsert = new EmailIngestMailboxUpsertRequest(
             ConnectorId: connectorId.Value,
             WorkflowId: workflowId,
-            IsEnabled: options?.EmailIsEnabled ?? true,
-            PollIntervalMinutes: options?.EmailPollIntervalMinutes
+            IsEnabled: mergedOptions?.EmailIsEnabled ?? true,
+            PollIntervalMinutes: mergedOptions?.EmailPollIntervalMinutes
                 ?? existing?.PollIntervalMinutes
-                ?? 5,
-            QueryFilter: options?.EmailQueryFilter ?? existing?.QueryFilter,
+                ?? 0,
+            QueryFilter: queryFilter,
             MasterSource: masterSource,
             MasterFormId: masterFormId,
-            MasterConnectorId: options?.MasterConnectorId ?? existing?.MasterConnectorId,
+            MasterConnectorId: mergedOptions?.MasterConnectorId ?? existing?.MasterConnectorId,
             AttachmentExtensions: existing?.AttachmentExtensions);
 
         if (string.Equals(upsert.MasterSource, EmailIngestMasterSources.InternalForm, StringComparison.OrdinalIgnoreCase)
@@ -200,7 +207,11 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
 
         var mail = start.Settings.MailInitiate ?? new WorkflowMailInitiateDto();
         mail = mail with { ConnectorId = new FlexibleWorkflowId(null, connectorId) };
-        var newSettings = start.Settings with { MailInitiate = mail };
+        var newSettings = start.Settings with
+        {
+            MailInitiate = mail,
+            ConnectorId = new FlexibleWorkflowId(null, connectorId)
+        };
         var newStart = start with { Settings = newSettings };
         var blocks = json.Blocks.Select(b => b.Id == start.Id ? newStart : b).ToList();
         var updated = json with { Blocks = blocks };
@@ -234,7 +245,10 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
                 : settings.ContainsKey("mailInitiate") ? "mailInitiate" : "MailInitiate";
             var mail = settings[mailKey] as JsonObject ?? new JsonObject();
             mail["ConnectorId"] = connectorId.ToString("D");
+            mail["connectorId"] = connectorId.ToString("D");
             settings[mailKey] = mail;
+            settings["connectorId"] = connectorId.ToString("D");
+            settings["ConnectorId"] = connectorId.ToString("D");
             return;
         }
     }
@@ -249,9 +263,17 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
         return false;
     }
 
+    private static WorkflowBlockDto? GetStartBlock(WorkflowJsonDto? json) =>
+        json?.Blocks?.FirstOrDefault(b =>
+            string.Equals(b.Type, "START", StringComparison.OrdinalIgnoreCase));
+
     private static bool IsEmailInitiate(WorkflowJsonDto? json, WorkflowEmailIngestOptions? options)
     {
         if (options?.EmailConnectorId is { } id && id != Guid.Empty)
+            return true;
+
+        var start = GetStartBlock(json);
+        if (TryResolveConnectorFromStartBlock(start) != null)
             return true;
 
         var type = json?.Settings?.General?.InitiateUsing?.Type;
@@ -259,8 +281,6 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
             type.Contains("EMAIL", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        var start = json?.Blocks?.FirstOrDefault(b =>
-            string.Equals(b.Type, "START", StringComparison.OrdinalIgnoreCase));
         if (start?.Settings?.InitiateBy != null &&
             start.Settings.InitiateBy.Any(x => x.Contains("EMAIL", StringComparison.OrdinalIgnoreCase)))
             return true;
@@ -268,14 +288,20 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
         return false;
     }
 
-    private static Guid? ResolveConnectorId(WorkflowEmailIngestOptions? options, WorkflowJsonDto? json)
+    private static Guid? ResolveConnectorId(
+        WorkflowEmailIngestOptions? options,
+        WorkflowJsonDto? json,
+        WorkflowBlockDto? startBlock = null)
     {
         if (options?.EmailConnectorId is { } top && top != Guid.Empty)
             return top;
 
-        var start = json?.Blocks?.FirstOrDefault(b =>
-            string.Equals(b.Type, "START", StringComparison.OrdinalIgnoreCase));
-        var flex = start?.Settings?.MailInitiate?.ConnectorId;
+        startBlock ??= GetStartBlock(json);
+        var fromStart = TryResolveConnectorFromStartBlock(startBlock);
+        if (fromStart != null)
+            return fromStart;
+
+        var flex = startBlock?.Settings?.MailInitiate?.ConnectorId;
         if (flex == null)
             return null;
         if (flex.Value.Guid is Guid g && g != Guid.Empty)
@@ -285,6 +311,77 @@ public sealed class WorkflowEmailIngestLinker : IWorkflowEmailIngestLinker
                 "MailInitiate.ConnectorId must be an OAuth connector Guid (not a legacy int). Re-connect Gmail/Outlook and pass emailConnectorId.");
         return null;
     }
+
+    private static Guid? TryResolveConnectorFromStartBlock(WorkflowBlockDto? startBlock)
+    {
+        var flex = startBlock?.Settings?.ConnectorId;
+        if (flex == null)
+            return null;
+        if (flex.Value.Guid is Guid g && g != Guid.Empty)
+            return g;
+        return null;
+    }
+
+    private static WorkflowEmailIngestOptions? MergeOptionsFromStartBlock(
+        WorkflowEmailIngestOptions? options,
+        WorkflowBlockDto? startBlock)
+    {
+        if (startBlock?.Settings == null)
+            return options;
+
+        var connectorId = TryResolveConnectorFromStartBlock(startBlock);
+        var query = BuildQueryFilterFromStartBlock(startBlock);
+
+        if (connectorId == null && string.IsNullOrWhiteSpace(query))
+            return options;
+
+        return new WorkflowEmailIngestOptions(
+            connectorId ?? options?.EmailConnectorId,
+            options?.EmailIsEnabled,
+            options?.EmailPollIntervalMinutes,
+            query ?? options?.EmailQueryFilter,
+            options?.MasterSource,
+            options?.MasterFormId,
+            options?.MasterConnectorId);
+    }
+
+    private static string? BuildQueryFilterFromStartBlock(WorkflowBlockDto? startBlock)
+    {
+        var settings = startBlock?.Settings;
+        if (settings == null)
+            return null;
+
+        var parts = new List<string>();
+
+        if (settings.HasAttachmentEnabled == true)
+            parts.Add("has:attachment");
+
+        if (settings.MailSubjectEnabled == true
+            && !string.IsNullOrWhiteSpace(settings.MailSubjectToMonitor))
+        {
+            parts.Add($"subject:{QuoteGmailTerm(settings.MailSubjectToMonitor.Trim())}");
+        }
+
+        if (settings.FromMailAddressEnabled == true
+            && settings.FromMailAddresses is { Length: > 0 } fromAddresses)
+        {
+            foreach (var addr in fromAddresses.Where(a => !string.IsNullOrWhiteSpace(a)))
+                parts.Add($"from:{QuoteGmailTerm(addr.Trim())}");
+        }
+
+        if (settings.FromDomainNameEnabled == true
+            && !string.IsNullOrWhiteSpace(settings.FromDomainName))
+        {
+            parts.Add($"from:*@{settings.FromDomainName.Trim().TrimStart('@')}");
+        }
+
+        return parts.Count == 0 ? null : string.Join(' ', parts);
+    }
+
+    private static string QuoteGmailTerm(string value) =>
+        value.Contains(' ', StringComparison.Ordinal) || value.Contains(':', StringComparison.Ordinal)
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
 
     private static EmailIngestMailboxUpsertRequest ToUpsert(EmailIngestMailboxDto existing, bool isEnabled) =>
         new(

@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using SaaSApp.MultiTenancy;
+using SaaSApp.Repository.Application;
 using SaaSApp.Repository.Application.Contracts;
 using SaaSApp.Repository.Infrastructure.Storage;
 
@@ -40,6 +41,13 @@ public sealed class RepositoryFileUploadService : IRepositoryFileUploadService
 
         if (string.IsNullOrWhiteSpace(request.FileName))
             throw new ArgumentException("File name is required.");
+
+        request = request with
+        {
+            FileName = RepositoryFileNameHelper.EnsureExtension(
+                request.FileName,
+                request.ContentType)
+        };
 
         var repo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken)
             ?? throw new InvalidOperationException("Repository not found.");

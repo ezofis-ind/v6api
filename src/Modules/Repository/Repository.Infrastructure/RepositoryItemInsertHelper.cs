@@ -56,6 +56,8 @@ internal static class RepositoryItemInsertHelper
         AddIfExists("FileType", "@FileType", request.FileType);
         AddIfExists("FileSize", "@FileSize", request.FileSize);
         AddIfExists("CreatedBy", "@CreatedBy", userId);
+        AddIfExists("OcrJson", "@OcrJson", request.OcrJson);
+        AddIfExists("OcrText", "@OcrText", request.OcrText);
 
         foreach (var (column, getValue) in OptionalCoreColumns)
             AddIfExists(column, $"@{column}", getValue(request));

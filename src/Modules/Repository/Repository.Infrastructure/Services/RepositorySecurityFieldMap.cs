@@ -36,6 +36,23 @@ public static class RepositorySecurityFieldMap
             ["PoAmount"] = item.PoAmount?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["OcrPercent"] = item.OcrPercent?.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
+
+        // Repository custom fields (BranchCode, EmployeeCode, …) — required for document security.
+        if (item.Fields is { Count: > 0 })
+        {
+            foreach (var kv in item.Fields)
+            {
+                if (string.IsNullOrWhiteSpace(kv.Key))
+                    continue;
+                // Keep GUID CreatedBy for share/ACL grants; list enrichment may put email in fields.createdBy.
+                if (string.Equals(kv.Key, "CreatedBy", StringComparison.OrdinalIgnoreCase)
+                    && item.CreatedByUserId is Guid uid
+                    && uid != Guid.Empty)
+                    continue;
+                map[kv.Key] = kv.Value?.ToString();
+            }
+        }
+
         return map;
     }
 

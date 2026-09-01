@@ -12,7 +12,17 @@ public interface IWorkflowStartBootstrapService
         CancellationToken cancellationToken = default);
 }
 
-public sealed record StartWorkflowStagedFileRef(Guid RepositoryId, Guid FileId);
+/// <summary>Stage row to promote on workflow start. Optional <see cref="FormJsonId"/> / <see cref="JsonId"/> targets the FILE control column after archive.</summary>
+public sealed record StartWorkflowStagedFileRef(Guid RepositoryId, Guid FileId, string? FormJsonId = null)
+{
+    [System.Text.Json.Serialization.JsonPropertyName("jsonId")]
+    public string? JsonId { get; init; }
+
+    public string? ResolveFormJsonId() =>
+        !string.IsNullOrWhiteSpace(FormJsonId) ? FormJsonId.Trim()
+        : !string.IsNullOrWhiteSpace(JsonId) ? JsonId.Trim()
+        : null;
+}
 
 public sealed record WorkflowStartBootstrapRequest(
     Domain.Entities.Workflow Workflow,

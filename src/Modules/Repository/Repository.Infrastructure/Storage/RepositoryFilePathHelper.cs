@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using SaaSApp.Repository.Application;
 
 namespace SaaSApp.Repository.Infrastructure.Storage;
 
@@ -8,13 +9,13 @@ internal static class RepositoryFilePathHelper
     public const string MonitorRoot = "monitor";
 
     /// <summary>Staging path before index/archive: monitor/{repositoryId}/{timestamp}/{fileName}</summary>
-    public static string BuildMonitorRelativePath(Guid repositoryId, string fileName)
+    public static string BuildMonitorRelativePath(Guid repositoryId, string fileName, string? contentType = null)
     {
         var ts = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
         var safe = SanitizePathSegment(Path.GetFileName(fileName));
         if (string.IsNullOrWhiteSpace(safe))
             safe = "document.pdf";
-        safe = EnsureFileNameHasExtension(safe, filePath: fileName);
+        safe = EnsureFileNameHasExtension(safe, contentType, filePath: fileName);
         return $"{MonitorRoot}/{repositoryId:N}/{ts}/{safe}";
     }
 
@@ -81,46 +82,8 @@ internal static class RepositoryFilePathHelper
     public static string EnsureFileNameHasExtension(
         string? fileName,
         string? contentType = null,
-        string? filePath = null)
-    {
-        var name = string.IsNullOrWhiteSpace(fileName)
-            ? string.Empty
-            : Path.GetFileName(fileName.Trim());
-
-        if (string.IsNullOrWhiteSpace(name))
-            name = "document";
-
-        var existingExt = Path.GetExtension(name);
-        // Real file extensions are short alphabetic (pdf, tiff, …). Reject numeric "extensions"
-        // like ".6001" from invoice-style names using dots (INV.2026.6001).
-        if (IsRealFileExtension(existingExt))
-            return name;
-
-        // Strip a fake numeric extension before appending the real one.
-        if (!string.IsNullOrEmpty(existingExt) && existingExt != ".")
-            name = Path.GetFileNameWithoutExtension(name);
-
-        var fromPath = !string.IsNullOrWhiteSpace(filePath)
-            ? Path.GetExtension(filePath.Trim().Replace('\\', '/'))
-            : null;
-        if (IsRealFileExtension(fromPath))
-            return name + fromPath!.ToLowerInvariant();
-
-        var fromMime = ExtensionFromContentType(contentType);
-        if (!string.IsNullOrEmpty(fromMime))
-            return name + fromMime;
-
-        return name + ".pdf";
-    }
-
-    private static bool IsRealFileExtension(string? ext)
-    {
-        if (string.IsNullOrEmpty(ext) || ext == ".")
-            return false;
-        // ".pdf", ".tiff", ".docx" — not ".6001" or ".2026"
-        var body = ext.TrimStart('.');
-        return body.Length is >= 2 and <= 8 && body.All(char.IsLetter);
-    }
+        string? filePath = null) =>
+        RepositoryFileNameHelper.EnsureExtension(fileName, contentType, filePath);
 
     /// <summary>Display/storage name: <c>invoice.pdf</c> (v1), <c>invoice_v2.pdf</c> (v2+).</summary>
     public static string ApplyVersionToFileName(string fileName, int fileVersion)
@@ -206,25 +169,6 @@ internal static class RepositoryFilePathHelper
         return ext.ToLowerInvariant();
     }
 
-    private static string? ExtensionFromContentType(string? contentType)
-    {
-        if (string.IsNullOrWhiteSpace(contentType))
-            return null;
-
-        var mime = contentType.Trim().Split(';')[0].Trim().ToLowerInvariant();
-        return mime switch
-        {
-            "application/pdf" => ".pdf",
-            "image/tiff" => ".tiff",
-            "image/tif" => ".tif",
-            "image/jpeg" or "image/jpg" => ".jpg",
-            "image/png" => ".png",
-            "application/msword" => ".doc",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
-            "application/vnd.ms-excel" => ".xls",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
-            _ when mime.StartsWith("image/", StringComparison.Ordinal) => ".img",
-            _ => null
-        };
-    }
+    private static string? ExtensionFromContentType(string? contentType) =>
+        RepositoryFileNameHelper.ExtensionFromContentType(contentType);
 }

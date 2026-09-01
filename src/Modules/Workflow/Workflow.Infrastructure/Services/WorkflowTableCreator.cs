@@ -429,6 +429,8 @@ BEGIN
           AND CHARACTER_MAXIMUM_LENGTH <> -1
     )
         ALTER TABLE workflow.[{prefix}_{workflowKey}] ALTER COLUMN formData nvarchar(max) NULL;
+    IF COL_LENGTH('{tableFullName}', 'createdByName') IS NULL
+        ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD createdByName nvarchar(255) NULL;
     IF COL_LENGTH('{tableFullName}', 'action') IS NULL
         ALTER TABLE workflow.[{prefix}_{workflowKey}] ADD [action] int NOT NULL
             CONSTRAINT [DF_{prefix}_{workflowKey}_action] DEFAULT (1);

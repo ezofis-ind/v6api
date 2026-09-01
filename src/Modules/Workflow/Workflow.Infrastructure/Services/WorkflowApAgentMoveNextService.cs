@@ -232,8 +232,11 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
         await connection.OpenAsync(cancellationToken);
 
         var normalizedFormId = FormIdNaming.NormalizeFormId(formId);
-        var wFormIdValue = await ResolveWFormIdParameterAsync(connection, normalizedFormId, cancellationToken);
-        var controls = await LoadFormControlsAsync(connection, wFormIdValue, cancellationToken);
+        var wFormIdCandidates = await FormWFormIdResolver.BuildCandidatesAsync(
+            connection,
+            normalizedFormId,
+            cancellationToken);
+        var controls = await LoadFormControlsWithFallbackAsync(connection, wFormIdCandidates, cancellationToken);
         var tableSuffix = FormIdNaming.GetEzfbTableSuffix(normalizedFormId);
         var ezfbTable = $"dbo.[ezfb_{tableSuffix}_items]";
         var ezfbColumns = await LoadTableColumnsAsync(connection, "dbo", $"ezfb_{tableSuffix}_items", cancellationToken);
@@ -255,10 +258,16 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
             if (TryResolveControlForField(key, controls, out var control) && control is not null)
             {
                 matchedControl = control;
-                if (!TryResolveEzfbColumn(control.JsonId, ezfbColumns, out var colFromControl))
+                var (columnOk, colFromControl) = await TryResolveOrCreateEzfbColumnAsync(
+                    connection,
+                    ezfbTable,
+                    control.JsonId,
+                    ezfbColumns,
+                    cancellationToken);
+                if (!columnOk)
                 {
                     _logger.LogWarning(
-                        "ezfb column not found for jsonId {JsonId} (control name {ControlName}).",
+                        "ezfb column not found/created for jsonId {JsonId} (control name {ControlName}).",
                         control.JsonId,
                         control.Name);
                     continue;
@@ -276,20 +285,7 @@ public sealed class WorkflowApAgentMoveNextService : IWorkflowApAgentMoveNextSer
                 column = colFromKey;
             }
 
-            var valueToWrite = value;
-            if (IsJsonArrayValue(value)
-                && matchedControl is not null
-                && IsLineItemControl(matchedControl))
-            {
-                valueToWrite = NormalizeLineItemsJson(value);
-            }
-            else if (IsJsonArrayValue(value) && matchedControl is null)
-            {
-                _logger.LogDebug(
-                    "Skipping array formData key {FieldKey}: no matching wFormControl for DYNAMIC_TABLE.",
-                    key);
-                continue;
-            }
+            var valueToWrite = PrepareFormDataValueForEzfb(value, matchedControl);
 
             try
             {
@@ -615,8 +611,10 @@ ORDER BY CreatedAt DESC, Id DESC;";
             var valueToWrite = value;
             if (IsJsonArrayValue(value) && IsPoRowLineItemKey(poRowKey) && IsDynamicTableControl(control))
                 valueToWrite = NormalizeLineItemsJson(value);
-            else if (IsJsonArrayValue(value))
+            else if (IsJsonArrayValue(value) && !IsDynamicTableControl(control) && !IsMultiSelectControl(control))
                 continue;
+            else if (IsJsonArrayValue(value))
+                valueToWrite = PrepareFormDataValueForEzfb(value, control);
 
             try
             {
@@ -1122,6 +1120,96 @@ END",
             : value;
     }
 
+    private static string PrepareFormDataValueForEzfb(string value, FormControlRow? matchedControl)
+    {
+        if (!IsJsonArrayValue(value))
+            return value;
+
+        if (matchedControl is not null)
+        {
+            if (IsLineItemControl(matchedControl))
+                return NormalizeLineItemsJson(value);
+
+            if (IsMultiSelectControl(matchedControl))
+                return value.Trim();
+
+            if (IsDynamicTableControl(matchedControl))
+                return NormalizeTableRowsJson(value);
+        }
+
+        return NormalizeTableRowsJson(value);
+    }
+
+    private static string NormalizeTableRowsJson(string value)
+    {
+        var trimmed = value.Trim();
+        if (!trimmed.StartsWith("[", StringComparison.Ordinal))
+            return value;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return trimmed;
+
+            var hasRowObjects = false;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                hasRowObjects = true;
+                break;
+            }
+
+            if (!hasRowObjects)
+                return trimmed;
+
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartArray();
+                foreach (var item in doc.RootElement.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object)
+                    {
+                        item.WriteTo(writer);
+                        continue;
+                    }
+
+                    writer.WriteStartObject();
+                    foreach (var prop in item.EnumerateObject())
+                    {
+                        if (string.Equals(prop.Name, "_rowId", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        prop.WriteTo(writer);
+                    }
+
+                    writer.WriteEndObject();
+                }
+
+                writer.WriteEndArray();
+            }
+
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (JsonException)
+        {
+            return value;
+        }
+    }
+
+    private static bool IsMultiSelectControl(FormControlRow control)
+    {
+        if (string.IsNullOrWhiteSpace(control.Type))
+            return false;
+
+        var type = control.Type.Trim();
+        return type.Contains("MULTI_SELECT", StringComparison.OrdinalIgnoreCase)
+            || type.Contains("MULTISELECT", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsLineItemControl(FormControlRow control) =>
         IsInvoiceExtractedLineItemControl(control);
 
@@ -1547,6 +1635,21 @@ VALUES
     }
 
     private sealed record FormControlRow(int Id, string JsonId, string? Name, string? Type, int ParentId);
+
+    private static async Task<List<FormControlRow>> LoadFormControlsWithFallbackAsync(
+        SqlConnection connection,
+        IReadOnlyList<object> wFormIdCandidates,
+        CancellationToken cancellationToken)
+    {
+        foreach (var candidate in wFormIdCandidates)
+        {
+            var controls = await LoadFormControlsAsync(connection, candidate, cancellationToken);
+            if (controls.Count > 0)
+                return controls;
+        }
+
+        return [];
+    }
 
     private static async Task<List<FormControlRow>> LoadFormControlsAsync(
         SqlConnection connection,

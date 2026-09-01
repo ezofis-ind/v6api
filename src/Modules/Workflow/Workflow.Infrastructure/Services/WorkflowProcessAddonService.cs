@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using SaaSApp.Repository.Application;
 using SaaSApp.Workflow.Application.Contracts;
 
 namespace SaaSApp.Workflow.Infrastructure.Services;
@@ -22,8 +23,12 @@ public sealed class WorkflowProcessAddonService : IWorkflowProcessAddonService
         string? fileName,
         int? transactionId,
         Guid userId,
+        string? contentType = null,
         CancellationToken cancellationToken = default)
     {
+        fileName = string.IsNullOrWhiteSpace(fileName)
+            ? fileName
+            : RepositoryFileNameHelper.EnsureExtension(fileName, contentType);
         var connectionString = _tenantContext.ConnectionString
             ?? throw new InvalidOperationException("Tenant connection string not resolved.");
 
@@ -86,7 +91,8 @@ public sealed class WorkflowProcessAddonService : IWorkflowProcessAddonService
                 reader.GetGuid(1),
                 reader.GetGuid(2),
                 reader.GetGuid(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
+                RepositoryFileNameHelper.EnsureExtension(
+                    reader.IsDBNull(4) ? null : reader.GetString(4)),
                 reader.IsDBNull(5) ? null : reader.GetInt32(5),
                 reader.GetDateTime(6),
                 reader.GetGuid(7)));

@@ -290,7 +290,9 @@ public sealed record CreateRepositoryItemRequest(
     Guid? FolderId,
     Guid? WorkflowInstanceId = null,
     IReadOnlyDictionary<string, string>? FieldValues = null,
-    int? FileVersion = null);
+    int? FileVersion = null,
+    string? OcrJson = null,
+    string? OcrText = null);
 
 /// <summary>Multipart upload: file + optional workflow link (workflowId + processId and/or instanceId).</summary>
 public sealed record RepositoryUploadItemRequest(
@@ -303,7 +305,10 @@ public sealed record RepositoryUploadItemRequest(
     int? TransactionId = null,
     string? StorageProviderCode = null,
     long? FileSize = null,
-    string? Metadata = null);
+    string? Metadata = null,
+    string? OcrJson = null,
+    string? OcrText = null,
+    bool AllowIncompleteFolderMetadata = false);
 
 public sealed record RepositoryUploadItemResult(
     Guid ItemId,
@@ -345,7 +350,9 @@ public sealed record RepositoryItemTimelineResultDto(
     int TotalCount,
     Guid? LinkedWorkflowInstanceId = null,
     Guid? LinkedWorkflowId = null,
-    string? LinkedWorkflowReferenceNumber = null);
+    string? LinkedWorkflowReferenceNumber = null,
+    IReadOnlyList<RepositoryItemTimelineEventDto>? WorkflowEvents = null,
+    int WorkflowEventCount = 0);
 
 public sealed record AddRepositoryItemTimelineEventRequest(
     string Title,
@@ -414,11 +421,16 @@ public sealed record RepositoryRelatedDocumentDto(
 public sealed record SaveRepositoryRelatedDocumentRef(
     Guid RepositoryId,
     Guid ItemId,
-    int? MatchScore = null);
+    int? MatchScore = null,
+    string? FileName = null,
+    string? FileType = null,
+    string? FilePath = null,
+    string? RepositoryName = null);
 
 /// <summary>
 /// Replace-on-save body: previous related docs for this source item are removed,
 /// then <see cref="Items"/> become the current set.
+/// Same body is used by POST append (adds without clearing).
 /// </summary>
 public sealed record SaveRepositoryRelatedDocumentsRequest(
     IReadOnlyList<SaveRepositoryRelatedDocumentRef> Items,
@@ -432,6 +444,7 @@ public sealed record RepositorySavedRelatedDocumentDto(
     Guid RelatedItemId,
     string? FileName,
     string? FileType,
+    string? FilePath,
     int? FileSize,
     string? DocumentType,
     string? Supplier,

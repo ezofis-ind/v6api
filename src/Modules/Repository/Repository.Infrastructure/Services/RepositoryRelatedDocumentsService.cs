@@ -102,41 +102,112 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
 
-        const string sql = """
-            SELECT Id, RelatedRepositoryId, RelatedItemId, MatchField, MatchValue, MatchScore, CreatedAtUtc
+        // Family of saved links: this item as source, OR any source that saved this item as related.
+        // Opening any related file then returns the same set (source + siblings), excluding the open item.
+        const string sourcesSql = """
+            SELECT DISTINCT RepositoryId, ItemId, MatchField, MatchValue
             FROM repository.ItemRelatedDocuments
             WHERE TenantId = @TenantId
-              AND RepositoryId = @RepositoryId
-              AND ItemId = @ItemId
               AND IsDeleted = 0
-            ORDER BY CreatedAtUtc DESC, Id DESC;
+              AND (
+                    (RepositoryId = @RepositoryId AND ItemId = @ItemId)
+                 OR (RelatedRepositoryId = @RepositoryId AND RelatedItemId = @ItemId)
+              );
             """;
 
-        await using var cmd = new SqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue("@TenantId", tenantId);
-        cmd.Parameters.AddWithValue("@RepositoryId", repositoryId);
-        cmd.Parameters.AddWithValue("@ItemId", itemId);
+        var sources = new List<(Guid SrcRepoId, Guid SrcItemId, string? MatchField, string? MatchValue)>();
+        await using (var srcCmd = new SqlCommand(sourcesSql, connection))
+        {
+            srcCmd.Parameters.AddWithValue("@TenantId", tenantId);
+            srcCmd.Parameters.AddWithValue("@RepositoryId", repositoryId);
+            srcCmd.Parameters.AddWithValue("@ItemId", itemId);
+            await using var srcReader = await srcCmd.ExecuteReaderAsync(cancellationToken);
+            while (await srcReader.ReadAsync(cancellationToken))
+            {
+                sources.Add((
+                    srcReader.GetGuid(0),
+                    srcReader.GetGuid(1),
+                    srcReader.IsDBNull(2) ? null : srcReader.GetString(2),
+                    srcReader.IsDBNull(3) ? null : srcReader.GetString(3)));
+            }
+        }
 
-        var links = new List<(Guid LinkId, Guid RelRepoId, Guid RelItemId, string? MatchField, string? MatchValue, int? MatchScore, DateTime CreatedAtUtc)>();
         string? matchField = null;
         string? matchValue = null;
+        var links = new List<(
+            Guid LinkId,
+            Guid RelRepoId,
+            Guid RelItemId,
+            string? MatchField,
+            string? MatchValue,
+            int? MatchScore,
+            DateTime CreatedAtUtc,
+            string? SnapshotRepoName,
+            string? SnapshotFileName,
+            string? SnapshotFileType,
+            string? SnapshotFilePath)>();
+        var seen = new HashSet<(Guid RepoId, Guid ItemId)>();
 
-        await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+        foreach (var src in sources)
         {
-            while (await reader.ReadAsync(cancellationToken))
+            matchField ??= src.MatchField;
+            matchValue ??= src.MatchValue;
+
+            // Include the save-source document itself when viewing from a related file.
+            if (!(src.SrcRepoId == repositoryId && src.SrcItemId == itemId)
+                && seen.Add((src.SrcRepoId, src.SrcItemId)))
             {
-                var mf = reader.IsDBNull(3) ? null : reader.GetString(3);
-                var mv = reader.IsDBNull(4) ? null : reader.GetString(4);
-                matchField ??= mf;
-                matchValue ??= mv;
                 links.Add((
-                    reader.GetGuid(0),
-                    reader.GetGuid(1),
-                    reader.GetGuid(2),
-                    mf,
-                    mv,
-                    reader.IsDBNull(5) ? null : Convert.ToInt32(reader.GetValue(5)),
-                    reader.GetDateTime(6)));
+                    Guid.Empty,
+                    src.SrcRepoId,
+                    src.SrcItemId,
+                    src.MatchField,
+                    src.MatchValue,
+                    null,
+                    DateTime.UtcNow,
+                    null,
+                    null,
+                    null,
+                    null));
+            }
+
+            const string relatedSql = """
+                SELECT Id, RelatedRepositoryId, RelatedItemId, MatchField, MatchValue, MatchScore, CreatedAtUtc,
+                       RelatedRepositoryName, FileName, FileType, FilePath
+                FROM repository.ItemRelatedDocuments
+                WHERE TenantId = @TenantId
+                  AND RepositoryId = @SourceRepositoryId
+                  AND ItemId = @SourceItemId
+                  AND IsDeleted = 0
+                ORDER BY CreatedAtUtc DESC, Id DESC;
+                """;
+
+            await using var relCmd = new SqlCommand(relatedSql, connection);
+            relCmd.Parameters.AddWithValue("@TenantId", tenantId);
+            relCmd.Parameters.AddWithValue("@SourceRepositoryId", src.SrcRepoId);
+            relCmd.Parameters.AddWithValue("@SourceItemId", src.SrcItemId);
+            await using var relReader = await relCmd.ExecuteReaderAsync(cancellationToken);
+            while (await relReader.ReadAsync(cancellationToken))
+            {
+                var relRepoId = relReader.GetGuid(1);
+                var relItemId = relReader.GetGuid(2);
+                if (relRepoId == repositoryId && relItemId == itemId)
+                    continue;
+                if (!seen.Add((relRepoId, relItemId)))
+                    continue;
+
+                links.Add((
+                    relReader.GetGuid(0),
+                    relRepoId,
+                    relItemId,
+                    relReader.IsDBNull(3) ? null : relReader.GetString(3),
+                    relReader.IsDBNull(4) ? null : relReader.GetString(4),
+                    relReader.IsDBNull(5) ? null : Convert.ToInt32(relReader.GetValue(5)),
+                    relReader.GetDateTime(6),
+                    relReader.FieldCount > 7 && !relReader.IsDBNull(7) ? relReader.GetString(7) : null,
+                    relReader.FieldCount > 8 && !relReader.IsDBNull(8) ? relReader.GetString(8) : null,
+                    relReader.FieldCount > 9 && !relReader.IsDBNull(9) ? relReader.GetString(9) : null,
+                    relReader.FieldCount > 10 && !relReader.IsDBNull(10) ? relReader.GetString(10) : null));
             }
         }
 
@@ -151,12 +222,13 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
                 cancellationToken);
 
             data.Add(new RepositorySavedRelatedDocumentDto(
-                link.LinkId,
+                link.LinkId == Guid.Empty ? Guid.NewGuid() : link.LinkId,
                 link.RelRepoId,
-                detail?.RepositoryName,
+                FirstNonEmpty(link.SnapshotRepoName, detail?.RepositoryName),
                 link.RelItemId,
-                detail?.FileName,
-                detail?.FileType,
+                FirstNonEmpty(link.SnapshotFileName, detail?.FileName),
+                FirstNonEmpty(link.SnapshotFileType, detail?.FileType),
+                FirstNonEmpty(link.SnapshotFilePath, detail?.FilePath),
                 detail?.FileSize,
                 detail?.DocumentType,
                 detail?.Supplier,
@@ -232,14 +304,41 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
 
         foreach (var item in items)
         {
+            var snapshotRepoName = TrimOrNull(item.RepositoryName);
+            var snapshotFileName = TrimOrNull(item.FileName);
+            var snapshotFileType = TrimOrNull(item.FileType);
+            var snapshotFilePath = TrimOrNull(item.FilePath);
+
+            // Fill missing snapshot fields from the live related item (needed for Python / reopen).
+            if (snapshotRepoName == null || snapshotFileName == null || snapshotFileType == null || snapshotFilePath == null)
+            {
+                var detail = await TryLoadRelatedItemAsync(
+                    connectionString,
+                    tenantId,
+                    item.RepositoryId,
+                    item.ItemId,
+                    cancellationToken);
+                if (detail != null)
+                {
+                    snapshotRepoName ??= detail.Value.RepositoryName;
+                    snapshotFileName ??= detail.Value.FileName;
+                    snapshotFileType ??= detail.Value.FileType;
+                    snapshotFilePath ??= detail.Value.FilePath;
+                }
+            }
+
             await using var insert = new SqlCommand(
                 """
                 INSERT INTO repository.ItemRelatedDocuments
                     (Id, TenantId, RepositoryId, ItemId, RelatedRepositoryId, RelatedItemId,
-                     MatchField, MatchValue, MatchScore, CreatedBy, CreatedAtUtc, IsDeleted)
+                     MatchField, MatchValue, MatchScore,
+                     RelatedRepositoryName, FileName, FileType, FilePath,
+                     CreatedBy, CreatedAtUtc, IsDeleted)
                 VALUES
                     (@Id, @TenantId, @RepositoryId, @ItemId, @RelatedRepositoryId, @RelatedItemId,
-                     @MatchField, @MatchValue, @MatchScore, @CreatedBy, SYSUTCDATETIME(), 0);
+                     @MatchField, @MatchValue, @MatchScore,
+                     @RelatedRepositoryName, @FileName, @FileType, @FilePath,
+                     @CreatedBy, SYSUTCDATETIME(), 0);
                 """,
                 connection,
                 tx);
@@ -252,11 +351,247 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
             insert.Parameters.AddWithValue("@MatchField", (object?)TrimOrNull(request.MatchField) ?? DBNull.Value);
             insert.Parameters.AddWithValue("@MatchValue", (object?)TrimOrNull(request.MatchValue) ?? DBNull.Value);
             insert.Parameters.AddWithValue("@MatchScore", (object?)item.MatchScore ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@RelatedRepositoryName", (object?)snapshotRepoName ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@FileName", (object?)snapshotFileName ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@FileType", (object?)snapshotFileType ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@FilePath", (object?)snapshotFilePath ?? DBNull.Value);
             insert.Parameters.AddWithValue("@CreatedBy", (object?)userId ?? DBNull.Value);
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await tx.CommitAsync(cancellationToken);
+        return await GetSavedRelatedAsync(repositoryId, tenantId, itemId, cancellationToken);
+    }
+
+    public async Task<RepositorySavedRelatedDocumentsResultDto?> AddSavedRelatedAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        Guid itemId,
+        SaveRepositoryRelatedDocumentsRequest request,
+        Guid? userId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var sourceRepo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken);
+        if (sourceRepo == null)
+            return null;
+
+        var source = await _items.GetItemAsync(repositoryId, tenantId, itemId, cancellationToken);
+        if (source == null)
+            return null;
+
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await EnsureRelatedSchemaAsync(connectionString, cancellationToken);
+
+        var items = (request.Items ?? Array.Empty<SaveRepositoryRelatedDocumentRef>())
+            .Where(i => i.RepositoryId != Guid.Empty && i.ItemId != Guid.Empty)
+            .Where(i => !(i.RepositoryId == repositoryId && i.ItemId == itemId))
+            .GroupBy(i => (i.RepositoryId, i.ItemId))
+            .Select(g => g.First())
+            .ToList();
+
+        if (items.Count == 0)
+            return await GetSavedRelatedAsync(repositoryId, tenantId, itemId, cancellationToken);
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        foreach (var item in items)
+        {
+            // Skip if already linked (active) for this source item.
+            await using (var existsCmd = new SqlCommand(
+                             """
+                             SELECT TOP (1) 1
+                             FROM repository.ItemRelatedDocuments
+                             WHERE TenantId = @TenantId
+                               AND RepositoryId = @RepositoryId
+                               AND ItemId = @ItemId
+                               AND RelatedRepositoryId = @RelatedRepositoryId
+                               AND RelatedItemId = @RelatedItemId
+                               AND IsDeleted = 0;
+                             """,
+                             connection))
+            {
+                existsCmd.Parameters.AddWithValue("@TenantId", tenantId);
+                existsCmd.Parameters.AddWithValue("@RepositoryId", repositoryId);
+                existsCmd.Parameters.AddWithValue("@ItemId", itemId);
+                existsCmd.Parameters.AddWithValue("@RelatedRepositoryId", item.RepositoryId);
+                existsCmd.Parameters.AddWithValue("@RelatedItemId", item.ItemId);
+                var exists = await existsCmd.ExecuteScalarAsync(cancellationToken);
+                if (exists != null && exists != DBNull.Value)
+                    continue;
+            }
+
+            var snapshotRepoName = TrimOrNull(item.RepositoryName);
+            var snapshotFileName = TrimOrNull(item.FileName);
+            var snapshotFileType = TrimOrNull(item.FileType);
+            var snapshotFilePath = TrimOrNull(item.FilePath);
+
+            if (snapshotRepoName == null || snapshotFileName == null || snapshotFileType == null || snapshotFilePath == null)
+            {
+                var detail = await TryLoadRelatedItemAsync(
+                    connectionString,
+                    tenantId,
+                    item.RepositoryId,
+                    item.ItemId,
+                    cancellationToken);
+                if (detail != null)
+                {
+                    snapshotRepoName ??= detail.Value.RepositoryName;
+                    snapshotFileName ??= detail.Value.FileName;
+                    snapshotFileType ??= detail.Value.FileType;
+                    snapshotFilePath ??= detail.Value.FilePath;
+                }
+            }
+
+            await using var insert = new SqlCommand(
+                """
+                INSERT INTO repository.ItemRelatedDocuments
+                    (Id, TenantId, RepositoryId, ItemId, RelatedRepositoryId, RelatedItemId,
+                     MatchField, MatchValue, MatchScore,
+                     RelatedRepositoryName, FileName, FileType, FilePath,
+                     CreatedBy, CreatedAtUtc, IsDeleted)
+                VALUES
+                    (@Id, @TenantId, @RepositoryId, @ItemId, @RelatedRepositoryId, @RelatedItemId,
+                     @MatchField, @MatchValue, @MatchScore,
+                     @RelatedRepositoryName, @FileName, @FileType, @FilePath,
+                     @CreatedBy, SYSUTCDATETIME(), 0);
+                """,
+                connection);
+            insert.Parameters.AddWithValue("@Id", Guid.NewGuid());
+            insert.Parameters.AddWithValue("@TenantId", tenantId);
+            insert.Parameters.AddWithValue("@RepositoryId", repositoryId);
+            insert.Parameters.AddWithValue("@ItemId", itemId);
+            insert.Parameters.AddWithValue("@RelatedRepositoryId", item.RepositoryId);
+            insert.Parameters.AddWithValue("@RelatedItemId", item.ItemId);
+            insert.Parameters.AddWithValue("@MatchField", (object?)TrimOrNull(request.MatchField) ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@MatchValue", (object?)TrimOrNull(request.MatchValue) ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@MatchScore", (object?)item.MatchScore ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@RelatedRepositoryName", (object?)snapshotRepoName ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@FileName", (object?)snapshotFileName ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@FileType", (object?)snapshotFileType ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@FilePath", (object?)snapshotFilePath ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@CreatedBy", (object?)userId ?? DBNull.Value);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        return await GetSavedRelatedAsync(repositoryId, tenantId, itemId, cancellationToken);
+    }
+
+    public async Task<RepositorySavedRelatedDocumentsResultDto?> DeleteSavedRelatedAsync(
+        Guid repositoryId,
+        Guid tenantId,
+        Guid itemId,
+        Guid? linkId = null,
+        Guid? relatedRepositoryId = null,
+        Guid? relatedItemId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var hasLinkId = linkId is { } lid && lid != Guid.Empty;
+        var hasRelatedPair = relatedRepositoryId is { } rr && rr != Guid.Empty
+                             && relatedItemId is { } ri && ri != Guid.Empty;
+
+        if (!hasLinkId && !hasRelatedPair)
+            throw new ArgumentException("Provide linkId, or relatedRepositoryId + relatedItemId.");
+
+        var sourceRepo = await _provisioner.GetRepositoryAsync(repositoryId, tenantId, cancellationToken);
+        if (sourceRepo == null)
+            return null;
+
+        var source = await _items.GetItemAsync(repositoryId, tenantId, itemId, cancellationToken);
+        if (source == null)
+            return null;
+
+        var connectionString = _connectionProvider.ConnectionString
+            ?? throw new InvalidOperationException("Tenant connection string not resolved.");
+
+        await EnsureRelatedSchemaAsync(connectionString, cancellationToken);
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        // Soft-delete by link row id (when FE has a real saved link id).
+        if (hasLinkId)
+        {
+            await using var byId = new SqlCommand(
+                """
+                UPDATE repository.ItemRelatedDocuments
+                SET IsDeleted = 1
+                WHERE TenantId = @TenantId
+                  AND Id = @LinkId
+                  AND IsDeleted = 0
+                  AND (
+                        (RepositoryId = @RepositoryId AND ItemId = @ItemId)
+                     OR (RelatedRepositoryId = @RepositoryId AND RelatedItemId = @ItemId)
+                  );
+                """,
+                connection);
+            byId.Parameters.AddWithValue("@TenantId", tenantId);
+            byId.Parameters.AddWithValue("@LinkId", linkId!.Value);
+            byId.Parameters.AddWithValue("@RepositoryId", repositoryId);
+            byId.Parameters.AddWithValue("@ItemId", itemId);
+            await byId.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // Soft-delete by related file pair across the open item's saved family.
+        if (hasRelatedPair)
+        {
+            await using var byPair = new SqlCommand(
+                """
+                UPDATE l
+                SET l.IsDeleted = 1
+                FROM repository.ItemRelatedDocuments l
+                WHERE l.TenantId = @TenantId
+                  AND l.IsDeleted = 0
+                  AND l.RelatedRepositoryId = @RelatedRepositoryId
+                  AND l.RelatedItemId = @RelatedItemId
+                  AND (
+                        (l.RepositoryId = @RepositoryId AND l.ItemId = @ItemId)
+                     OR EXISTS (
+                            SELECT 1
+                            FROM repository.ItemRelatedDocuments s
+                            WHERE s.TenantId = @TenantId
+                              AND s.IsDeleted = 0
+                              AND s.RelatedRepositoryId = @RepositoryId
+                              AND s.RelatedItemId = @ItemId
+                              AND s.RepositoryId = l.RepositoryId
+                              AND s.ItemId = l.ItemId
+                        )
+                  );
+                """,
+                connection);
+            byPair.Parameters.AddWithValue("@TenantId", tenantId);
+            byPair.Parameters.AddWithValue("@RepositoryId", repositoryId);
+            byPair.Parameters.AddWithValue("@ItemId", itemId);
+            byPair.Parameters.AddWithValue("@RelatedRepositoryId", relatedRepositoryId!.Value);
+            byPair.Parameters.AddWithValue("@RelatedItemId", relatedItemId!.Value);
+            await byPair.ExecuteNonQueryAsync(cancellationToken);
+
+            // If FE deletes the synthetic "source" row while on a related file, unlink this open item
+            // from that source's saved set (source = relatedRepositoryId/relatedItemId pair).
+            await using var unlinkSelf = new SqlCommand(
+                """
+                UPDATE repository.ItemRelatedDocuments
+                SET IsDeleted = 1
+                WHERE TenantId = @TenantId
+                  AND IsDeleted = 0
+                  AND RepositoryId = @RelatedRepositoryId
+                  AND ItemId = @RelatedItemId
+                  AND RelatedRepositoryId = @RepositoryId
+                  AND RelatedItemId = @ItemId;
+                """,
+                connection);
+            unlinkSelf.Parameters.AddWithValue("@TenantId", tenantId);
+            unlinkSelf.Parameters.AddWithValue("@RepositoryId", repositoryId);
+            unlinkSelf.Parameters.AddWithValue("@ItemId", itemId);
+            unlinkSelf.Parameters.AddWithValue("@RelatedRepositoryId", relatedRepositoryId!.Value);
+            unlinkSelf.Parameters.AddWithValue("@RelatedItemId", relatedItemId!.Value);
+            await unlinkSelf.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         return await GetSavedRelatedAsync(repositoryId, tenantId, itemId, cancellationToken);
     }
 
@@ -735,7 +1070,7 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
         SchemaEnsured.TryAdd(connectionString, 0);
     }
 
-    private async Task<(string? RepositoryName, string? FileName, string? FileType, int? FileSize, string? DocumentType, string? Supplier, string? PoNumber, string? InvoiceNumber)?> TryLoadRelatedItemAsync(
+    private async Task<(string? RepositoryName, string? FileName, string? FileType, string? FilePath, int? FileSize, string? DocumentType, string? Supplier, string? PoNumber, string? InvoiceNumber)?> TryLoadRelatedItemAsync(
         string connectionString,
         Guid tenantId,
         Guid relatedRepositoryId,
@@ -754,6 +1089,7 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
                 repo?.Name,
                 item.FileName,
                 item.FileType,
+                item.FilePath,
                 item.FileSize,
                 ResolveFieldValue(item.Fields, DocumentTypeAliases),
                 ResolveFieldValue(item.Fields, SupplierAliases),
@@ -774,6 +1110,9 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
     private static string? TrimOrNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static string? FirstNonEmpty(string? preferred, string? fallback) =>
+        !string.IsNullOrWhiteSpace(preferred) ? preferred.Trim() : TrimOrNull(fallback);
+
     private const string EnsureRelatedSchemaSql = """
         IF NOT EXISTS (
             SELECT 1 FROM sys.tables t
@@ -790,6 +1129,10 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
                 MatchField              NVARCHAR(128) NULL,
                 MatchValue              NVARCHAR(450) NULL,
                 MatchScore              INT NULL,
+                RelatedRepositoryName   NVARCHAR(256) NULL,
+                FileName                NVARCHAR(512) NULL,
+                FileType                NVARCHAR(128) NULL,
+                FilePath                NVARCHAR(1024) NULL,
                 CreatedBy               UNIQUEIDENTIFIER NULL,
                 CreatedAtUtc            DATETIME2(3) NOT NULL CONSTRAINT DF_ItemRelatedDocuments_CreatedAtUtc DEFAULT (SYSUTCDATETIME()),
                 IsDeleted               BIT NOT NULL CONSTRAINT DF_ItemRelatedDocuments_IsDeleted DEFAULT (0)
@@ -797,6 +1140,15 @@ public sealed class RepositoryRelatedDocumentsService : IRepositoryRelatedDocume
             CREATE INDEX IX_ItemRelatedDocuments_Source
                 ON repository.ItemRelatedDocuments (TenantId, RepositoryId, ItemId, IsDeleted, CreatedAtUtc);
         END
+
+        IF COL_LENGTH('repository.ItemRelatedDocuments', 'RelatedRepositoryName') IS NULL
+            ALTER TABLE repository.ItemRelatedDocuments ADD RelatedRepositoryName NVARCHAR(256) NULL;
+        IF COL_LENGTH('repository.ItemRelatedDocuments', 'FileName') IS NULL
+            ALTER TABLE repository.ItemRelatedDocuments ADD FileName NVARCHAR(512) NULL;
+        IF COL_LENGTH('repository.ItemRelatedDocuments', 'FileType') IS NULL
+            ALTER TABLE repository.ItemRelatedDocuments ADD FileType NVARCHAR(128) NULL;
+        IF COL_LENGTH('repository.ItemRelatedDocuments', 'FilePath') IS NULL
+            ALTER TABLE repository.ItemRelatedDocuments ADD FilePath NVARCHAR(1024) NULL;
         """;
 
     private sealed record MatchCriterion(string Key, string Value, string[] Aliases);

@@ -26,7 +26,10 @@ public interface IRepositoryUploadIndexService
         string? filename = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Stage to monitor blob, run OCR, persist OcrJson + extracted fields; return fileId.</summary>
+    /// <summary>
+    /// Stage file to monitor blob + stage table using caller-provided OCR metadata (no OCR call).
+    /// Typical flow: uploadForOcr → then uploadWithOcr(file, repositoryId, metadata).
+    /// </summary>
     Task<UploadWithOcrResult> UploadWithOcrAsync(
         Guid repositoryId,
         Guid tenantId,
@@ -34,10 +37,9 @@ public interface IRepositoryUploadIndexService
         string fileName,
         string? contentType,
         long fileSize,
-        string? fieldsJson,
-        string? pageNo,
-        string? ocrType,
-        string? validateType,
+        string? metadataJson,
+        string? ocrJson,
+        string? ocrText,
         Guid? userId,
         CancellationToken cancellationToken = default);
 
@@ -47,6 +49,7 @@ public interface IRepositoryUploadIndexService
         Guid repositoryId,
         Guid tenantId,
         Guid? userId,
+        bool allowIncompleteFolderMetadata = false,
         CancellationToken cancellationToken = default);
 
     Task<UploadIndexLoadResult?> LoadAsync(

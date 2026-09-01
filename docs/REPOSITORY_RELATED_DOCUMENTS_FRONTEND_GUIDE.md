@@ -179,6 +179,8 @@ FE shows the results list with % and a `+` to select docs to save.
 
 For each **Item ID + Repository ID**, only the **latest** saved set is kept.
 
+**Snapshot fields** (`matchScore`, `fileName`, `fileType`, `filePath`, `repositoryName`) are stored at save time so reopen / Python APIs can use them without re-resolving the live item. If FE omits any of those, the API fills them from the live related item before insert.
+
 ### Get saved (on item open)
 
 ```http
@@ -196,6 +198,26 @@ Content-Type: application/json
 
 Path uses the **source** (open) file. Body `items[]` uses each **related** file’s `repositoryId` + `id` from the search response (`itemId` in the body = search row `id`).
 
+#### Recommended PUT body (include snapshot for Python / reopen)
+
+Send `matchScore`, `fileName`, `fileType`, `filePath`, and optionally `repositoryName` from the match result (or item detail).
+
+```json
+{
+  "items": [
+    {
+      "repositoryId": "f1138fe5-ddfa-4daf-8562-11fa4e989f23",
+      "itemId": "2d692628-b881-45f5-9002-3f3ce158f4cd",
+      "matchScore": 93,
+      "fileName": "INV-2026-3101_v8.pdf",
+      "fileType": "application/pdf",
+      "filePath": "monitor/f1138fe5-…/INV-2026-3101_v8.pdf",
+      "repositoryName": "Accounts Payable"
+    }
+  ]
+}
+```
+
 #### A) Overall match (all fields) — default `related-exact`
 
 Do **not** set `matchField` / `matchValue` (or send `null`). This is the common case after `GET …/related-exact` with no `field` param.
@@ -206,7 +228,11 @@ Do **not** set `matchField` / `matchValue` (or send `null`). This is the common 
     {
       "repositoryId": "f1138fe5-ddfa-4daf-8562-11fa4e989f23",
       "itemId": "2d692628-b881-45f5-9002-3f3ce158f4cd",
-      "matchScore": 93
+      "matchScore": 93,
+      "fileName": "INV-2026-3101_v8.pdf",
+      "fileType": "application/pdf",
+      "filePath": "monitor/…/INV-2026-3101_v8.pdf",
+      "repositoryName": "Accounts Payable"
     }
   ]
 }
@@ -222,7 +248,11 @@ Do **not** set `matchField` / `matchValue` (or send `null`). This is the common 
     {
       "repositoryId": "11111111-2222-3333-4444-555555555555",
       "itemId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
-      "matchScore": 100
+      "matchScore": 100,
+      "fileName": "PO-77291_v9.pdf",
+      "fileType": "application/pdf",
+      "filePath": "monitor/…/PO-77291_v9.pdf",
+      "repositoryName": "Test Invoice 2026"
     }
   ]
 }
@@ -234,13 +264,14 @@ Do **not** set `matchField` / `matchValue` (or send `null`). This is the common 
 | Empty `items` | Clears all saved related docs for this item |
 | Reopen | `GET …/related-saved` returns only the latest set |
 | Overall vs field | Overall → omit `matchField`/`matchValue`; field banner → set both |
+| Snapshot | Prefer sending `matchScore`, `fileName`, `fileType`, `filePath`; API backfills missing ones from live item |
 
 ### Flow (matches product requirement)
 
 1. Overall: `GET …/related-exact` **or** field: `GET …/related-exact?field=…&value=…`
 2. Results show % (only ≥ 50).
-3. User selects docs (`+`) → `PUT …/related-saved` (body as A or B above).
-4. Reopen same item → `GET …/related-saved` shows Document A.
+3. User selects docs (`+`) → `PUT …/related-saved` (body as A or B above, **with snapshot fields**).
+4. Reopen same item → `GET …/related-saved` shows Document A (including `filePath` / `fileName` / `fileType` / `matchScore`).
 5. New match → select Document B → `PUT` again → Document A is replaced; only B remains.
 
 ### Sample saved response
@@ -258,7 +289,14 @@ Do **not** set `matchField` / `matchValue` (or send `null`). This is the common 
       "relatedRepositoryId": "f1138fe5-ddfa-4daf-8562-11fa4e989f23",
       "relatedRepositoryName": "Accounts Payable",
       "relatedItemId": "2d692628-b881-45f5-9002-3f3ce158f4cd",
-      "fileName": "INV-2026-3101_v8",
+      "fileName": "INV-2026-3101_v8.pdf",
+      "fileType": "application/pdf",
+      "filePath": "monitor/f1138fe5-…/INV-2026-3101_v8.pdf",
+      "fileSize": 204800,
+      "documentType": "Invoice",
+      "supplier": "ACME Corp",
+      "poNumber": "PO-12345",
+      "invoiceNumber": "INV-2026-3101",
       "matchScore": 93,
       "matchField": null,
       "matchValue": null,
@@ -297,14 +335,31 @@ Do **not** set `matchField` / `matchValue` (or send `null`). This is the common 
 | `matchCount` | int | Fields matched |
 | `matchedFields` | string[] | Which keys matched |
 
-### Saved (`related-saved`)
+### Saved (`related-saved`) request `items[]`
+
+| Field | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `repositoryId` | guid | **Yes** | Related file’s repo |
+| `itemId` | guid | **Yes** | Related file’s item id (= search row `id`) |
+| `matchScore` | int? | Recommended | Score at match time (for UI / Python) |
+| `fileName` | string? | Recommended | Snapshot file name |
+| `fileType` | string? | Recommended | Snapshot content type / extension |
+| `filePath` | string? | Recommended | Snapshot storage relative path (needed for Python) |
+| `repositoryName` | string? | Optional | Snapshot repo display name |
+
+### Saved (`related-saved`) response
 
 | Field | Type | Meaning |
 |-------|------|---------|
 | `matchField` / `matchValue` | string? | Set only for single-field saves; `null` for overall |
-| `data[].relatedRepositoryId` | guid | Related file’s repo |
-| `data[].relatedItemId` | guid | Related file’s item id |
+| `data[].id` | guid | Link row id (**do not** use for navigation) |
+| `data[].relatedRepositoryId` | guid | Related file’s repo — use for open / download |
+| `data[].relatedItemId` | guid | Related file’s item id — use for open / download |
+| `data[].relatedRepositoryName` | string? | Repo name (saved snapshot preferred) |
+| `data[].fileName` / `fileType` / `filePath` | string? | File snapshot (saved preferred, else live) |
+| `data[].fileSize` | int? | From live item when available |
 | `data[].matchScore` | int? | Score at save time |
+| `data[].documentType` / `supplier` / `poNumber` / `invoiceNumber` | string? | From live item when available |
 
 ---
 
@@ -318,11 +373,16 @@ On open item:
 Overall “Check for matches”:
   → GET …/related-exact
   → user selects rows with +
-  → PUT …/related-saved   { "items": [ { repositoryId, itemId, matchScore } ] }
+  → PUT …/related-saved   {
+        "items": [ {
+          repositoryId, itemId, matchScore,
+          fileName, fileType, filePath, repositoryName
+        } ]
+      }
 
 Field banner “Check for matches”:
   → GET …/related-exact?field=Supplier&value=…
-  → PUT …/related-saved   { "matchField", "matchValue", "items": […] }
+  → PUT …/related-saved   { "matchField", "matchValue", "items": [ …same snapshot fields… ] }
 ```
 
 ### Open a related file
@@ -333,6 +393,12 @@ Field banner “Check for matches”:
 
 For search results use row `repositoryId` + `id`.  
 For saved results use `relatedRepositoryId` + `relatedItemId`.
+
+On open, call **`GET …/related-saved`** with **that file’s** `repositoryId` + `itemId`  
+(use `relatedRepositoryId` + **`relatedItemId`** — not the link `id`).
+
+Saved links are stored on the source item. Opening any related file returns the **same family**  
+(source document + other saved related docs), excluding the file you currently have open.
 
 ### File download / preview
 
@@ -376,5 +442,6 @@ Empty match example (no metadata to search on):
 
 | Doc | Topic |
 |-----|--------|
+| `BRANDING_FRONTEND_GUIDE.md` | Branding encrypt / get / save-update |
 | `REPOSITORY_TIMELINE_AND_COMMENTS_FRONTEND_GUIDE.md` | Timeline + comments tabs |
 | `REPOSITORY_FILE_SHARE_FRONTEND_GUIDE.md` | Cross-tenant file share |
