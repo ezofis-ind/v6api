@@ -106,6 +106,14 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
             client.Timeout = TimeSpan.FromSeconds(seconds);
         });
         services.AddScoped<IApDashboardInsightsClient, ApDashboardInsightsClient>();
+        services.Configure<DashboardPythonOptions>(configuration.GetSection(DashboardPythonOptions.SectionName));
+        services.AddHttpClient(nameof(DashboardPythonClient), (sp, client) =>
+        {
+            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<DashboardPythonOptions>>().Value;
+            var seconds = Math.Clamp(opts.TimeoutSeconds, 5, 300);
+            client.Timeout = TimeSpan.FromSeconds(seconds);
+        });
+        services.AddScoped<IDashboardPythonClient, DashboardPythonClient>();
         services.AddScoped<IWorkflowStepSyncService, WorkflowStepSyncService>();
         services.AddScoped<IWorkflowStartBootstrapService, WorkflowStartBootstrapService>();
         services.AddScoped<IWorkflowApAgentMoveNextService, WorkflowApAgentMoveNextService>();
