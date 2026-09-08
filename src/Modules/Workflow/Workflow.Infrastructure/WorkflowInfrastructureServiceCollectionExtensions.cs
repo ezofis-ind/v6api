@@ -114,6 +114,7 @@ public static class WorkflowInfrastructureServiceCollectionExtensions
             client.Timeout = TimeSpan.FromSeconds(seconds);
         });
         services.AddScoped<IDashboardPythonClient, DashboardPythonClient>();
+        services.AddScoped<IWorkflowTicketNumberService, WorkflowTicketNumberService>();
         services.AddScoped<IWorkflowStepSyncService, WorkflowStepSyncService>();
         services.AddScoped<IWorkflowStartBootstrapService, WorkflowStartBootstrapService>();
         services.AddScoped<IWorkflowApAgentMoveNextService, WorkflowApAgentMoveNextService>();

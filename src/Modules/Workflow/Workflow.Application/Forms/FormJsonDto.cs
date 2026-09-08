@@ -43,8 +43,15 @@ public sealed class FormPanelDto
 public sealed class FormFieldDto
 {
     public string? Id { get; set; }
+
+    /// <summary>Top-level control label from designer JSON.</summary>
     public string? Label { get; set; }
+
+    /// <summary>TABLE column header from designer JSON (<c>tableColumns[].name</c>).</summary>
+    public string? Name { get; set; }
+
     public string? Type { get; set; }
+
     public FormFieldSettingsDto? Settings { get; set; }
 }
 

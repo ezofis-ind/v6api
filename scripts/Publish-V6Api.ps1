@@ -60,6 +60,31 @@ dotnet clean $ProjectPath -c Release -v q
 
 Write-Host "Publishing to $OutputPath ..." -ForegroundColor Cyan
 dotnet publish $ProjectPath -c Release -o $OutputPath
+if ($LASTEXITCODE -ne 0) {
+    if ($hadOffline -and (Test-Path $offline)) { Remove-Item $offline -Force }
+    Write-Host "dotnet publish failed (exit $LASTEXITCODE)." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
+# IIS hosts from this folder only — copy appsettings + web.config next to the DLLs.
+$apiDir = Split-Path $ProjectPath -Parent
+$configFiles = @(
+    "appsettings.json",
+    "appsettings.Production.json",
+    "appsettings.Development.json",
+    "appsettings.ActivityLog.json",
+    "appsettings.EventLog.json",
+    "appsettings.example.json",
+    "web.config"
+)
+Write-Host "Copying config into $OutputPath ..." -ForegroundColor Cyan
+foreach ($name in $configFiles) {
+    $from = Join-Path $apiDir $name
+    if (Test-Path $from) {
+        Copy-Item $from (Join-Path $OutputPath $name) -Force
+        Write-Host "  $name"
+    }
+}
 
 if ($hadOffline -and (Test-Path $offline)) {
     Remove-Item $offline -Force

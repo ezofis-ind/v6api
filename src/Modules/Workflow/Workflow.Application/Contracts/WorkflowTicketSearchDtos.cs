@@ -16,9 +16,9 @@ public sealed record WorkflowTicketFilterSchemaDto(
 /// <summary>
 /// One filter clause for POST .../filter/search.
 /// <list type="bullet">
-/// <item><description><c>dataType</c> date: <c>value</c> is a string; use <c>valueTo</c> with condition <c>between</c> for ranges.</description></item>
+/// <item><description><c>dataType</c> date: <c>value</c> may be a calendar date, or a preset such as <c>overdue</c>, <c>due today</c>, <c>next 7 days</c>.</description></item>
+/// <item><description>Amount / high-value filters may send <c>0-8000</c>, <c>$1k-$5k</c>, <c>&lt; $1k</c> even when <c>dataType</c> is SHORT_TEXT.</description></item>
 /// <item><description>Other dataTypes: <c>value</c> may be a string/number or a JSON array (e.g. for <c>in</c>).</description></item>
-/// <item><description>Legacy clients may still send <c>value</c> as a plain string without <c>dataType</c>/<c>valueTo</c>.</description></item>
 /// </list>
 /// </summary>
 public sealed record WorkflowTicketSearchFilter(

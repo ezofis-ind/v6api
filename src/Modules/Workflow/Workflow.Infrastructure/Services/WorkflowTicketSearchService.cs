@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using SaaSApp.MultiTenancy;
 using SaaSApp.Workflow.Application.Contracts;
@@ -199,12 +200,18 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
         }
 
         var ezfbWhereSql = string.Join(" AND ", ezfbWhereParts);
+        var hasArchived = await ColumnExistsAsync(connection, "workflow", $"WorkflowInstances_{workflowSuffix}", "IsArchived", cancellationToken);
+        var instanceAliveSql = hasArchived ? "AND wi.IsArchived = 0" : "";
+        // Only count live tickets. processForm can hold FormEntryIds whose WorkflowInstanceId
+        // was never created / already removed — those showed up as id=0, no referenceNumber.
         var matchedInstancesCte = filters.Count == 0
             ? $"""
                 matched AS (
                     SELECT DISTINCT pf.WorkflowInstanceId
                     FROM {processFormTable} pf
+                    INNER JOIN {instancesTable} wi ON wi.Id = pf.WorkflowInstanceId
                     WHERE pf.IsDeleted = 0
+                      {instanceAliveSql}
                 )
                 """
             : $"""
@@ -212,7 +219,9 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
                     SELECT DISTINCT pf.WorkflowInstanceId
                     FROM {processFormTable} pf
                     INNER JOIN dbo.[{ezfbTable}] e ON e.itemId = pf.FormEntryId
+                    INNER JOIN {instancesTable} wi ON wi.Id = pf.WorkflowInstanceId
                     WHERE pf.IsDeleted = 0
+                      {instanceAliveSql}
                       AND {ezfbWhereSql}
                 )
                 """;
@@ -222,8 +231,9 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
         var hasCompletedAt = await ColumnExistsAsync(connection, "workflow", $"WorkflowInstances_{workflowSuffix}", "CompletedAtUtc", cancellationToken);
         var hasModifiedBy = await ColumnExistsAsync(connection, "workflow", $"transaction_{workflowSuffix}", "ModifiedBy", cancellationToken);
         var completedAtSelect = hasCompletedAt ? "wi.CompletedAtUtc" : "CAST(NULL AS datetime2)";
-        var modifiedBySelect = hasModifiedBy ? "t.ModifiedBy" : "CAST(NULL AS uniqueidentifier)";
 
+        // Count and page from the same instance set. Do not inner-join transactions for the count —
+        // that dropped rows (e.g. 11 matched instances, only 6 with a transaction).
         var countSql = $"""
             WITH {matchedInstancesCte}
             SELECT COUNT(1) FROM matched;
@@ -243,23 +253,19 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
 
         var dataSql = $"""
             WITH {matchedInstancesCte},
-            ranked AS (
+            latestTxn AS (
                 SELECT
-                    t.Id AS TransactionId,
+                    t.Id,
                     t.WorkflowInstanceId,
-                    wi.ReferenceNumber,
-                    wi.StartedAtUtc AS InstanceStartedAtUtc,
-                    {completedAtSelect} AS CompletedAtUtc,
-                    wi.StartedBy AS RaisedByUserId,
                     t.ActivityId,
                     t.RuleId,
                     t.StageType,
                     t.StageName,
                     t.Review,
-                    t.CreatedAt AS TransactionCreatedAt,
-                    t.CreatedBy AS TransactionCreatedBy,
-                    t.ModifiedAt AS TransactionModifiedAt,
-                    {modifiedBySelect} AS TransactionModifiedBy,
+                    t.CreatedAt,
+                    t.CreatedBy,
+                    t.ModifiedAt,
+                    {(hasModifiedBy ? "t.ModifiedBy" : "CAST(NULL AS uniqueidentifier)")} AS ModifiedBy,
                     t.ActivityUserId,
                     t.ActivityGroupId,
                     ROW_NUMBER() OVER (
@@ -267,13 +273,30 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
                         ORDER BY t.CreatedAt DESC, t.Id DESC
                     ) AS rn
                 FROM {transactionTable} t
-                INNER JOIN {instancesTable} wi ON wi.Id = t.WorkflowInstanceId
                 INNER JOIN matched m ON m.WorkflowInstanceId = t.WorkflowInstanceId
                 WHERE t.IsDeleted = 0
             )
-            SELECT *
-            FROM ranked
-            WHERE rn = 1
+            SELECT
+                CAST(ISNULL(t.Id, 0) AS INT) AS TransactionId,
+                m.WorkflowInstanceId,
+                wi.ReferenceNumber,
+                wi.StartedAtUtc AS InstanceStartedAtUtc,
+                {completedAtSelect} AS CompletedAtUtc,
+                wi.StartedBy AS RaisedByUserId,
+                t.ActivityId,
+                t.RuleId,
+                t.StageType,
+                t.StageName,
+                t.Review,
+                ISNULL(t.CreatedAt, wi.StartedAtUtc) AS TransactionCreatedAt,
+                t.CreatedBy AS TransactionCreatedBy,
+                t.ModifiedAt AS TransactionModifiedAt,
+                t.ModifiedBy AS TransactionModifiedBy,
+                t.ActivityUserId,
+                t.ActivityGroupId
+            FROM matched m
+            INNER JOIN {instancesTable} wi ON wi.Id = m.WorkflowInstanceId
+            LEFT JOIN latestTxn t ON t.WorkflowInstanceId = m.WorkflowInstanceId AND t.rn = 1
             ORDER BY {sortColumn} {sortOrder}
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
             """;
@@ -844,9 +867,27 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
         var scalar = GetScalarValue(value);
         var listValues = GetValueList(value);
 
+        if (TryBuildDatePreset(columnExpr, scalar, typeHint, cond, out sql, out parameters))
+            return true;
+
+        if (TryBuildNumericRange(columnExpr, scalar, valueTo, typeHint, cond, paramBase, out sql, out parameters))
+            return true;
+
         switch (cond)
         {
             case "eq" or "=" or "equal":
+                if (isDate && DateTime.TryParse(scalar, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var eqDate))
+                {
+                    sql = $"{DateColumnSql(columnExpr)} = CAST({paramBase} AS date)";
+                    parameters.Add(new SqlParameter(paramBase, eqDate.Date));
+                    return true;
+                }
+                if (TryParseMoney(scalar, out var eqMoney))
+                {
+                    sql = $"{NumericColumnSql(columnExpr)} = {paramBase}";
+                    parameters.Add(new SqlParameter(paramBase, eqMoney));
+                    return true;
+                }
                 sql = $"{columnExpr} = {paramBase}";
                 parameters.Add(new SqlParameter(paramBase, scalar ?? string.Empty));
                 return true;
@@ -948,16 +989,15 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
             && DateTime.TryParse(valueFrom, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var fromDt)
             && DateTime.TryParse(valueTo, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var toDt))
         {
-            sql = $"TRY_CONVERT(datetime2, {columnExpr}) >= {fromName} AND TRY_CONVERT(datetime2, {columnExpr}) <= {toName}";
-            parameters.Add(new SqlParameter(fromName, fromDt));
-            parameters.Add(new SqlParameter(toName, toDt));
+            sql = $"{DateColumnSql(columnExpr)} >= CAST({fromName} AS date) AND {DateColumnSql(columnExpr)} <= CAST({toName} AS date)";
+            parameters.Add(new SqlParameter(fromName, fromDt.Date));
+            parameters.Add(new SqlParameter(toName, toDt.Date));
             return true;
         }
 
-        if (decimal.TryParse(valueFrom, NumberStyles.Any, CultureInfo.InvariantCulture, out var fromNum)
-            && decimal.TryParse(valueTo, NumberStyles.Any, CultureInfo.InvariantCulture, out var toNum))
+        if (TryParseMoney(valueFrom, out var fromNum) && TryParseMoney(valueTo, out var toNum))
         {
-            sql = $"TRY_CONVERT(float, {columnExpr}) >= {fromName} AND TRY_CONVERT(float, {columnExpr}) <= {toName}";
+            sql = $"{NumericColumnSql(columnExpr)} >= {fromName} AND {NumericColumnSql(columnExpr)} <= {toName}";
             parameters.Add(new SqlParameter(fromName, fromNum));
             parameters.Add(new SqlParameter(toName, toNum));
             return true;
@@ -1002,12 +1042,20 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
 
     private sealed record AgentValidationResult(string? WorkflowId, string? AgentResponse, string? AgentHtml);
 
-    private static TicketSearchRow ReadSearchRow(SqlDataReader reader) =>
-        new(
-            TransactionId: reader.GetInt32(reader.GetOrdinal("TransactionId")),
+    private static TicketSearchRow ReadSearchRow(SqlDataReader reader)
+    {
+        var startedOrd = reader.GetOrdinal("InstanceStartedAtUtc");
+        var createdOrd = reader.GetOrdinal("TransactionCreatedAt");
+        var started = reader.IsDBNull(startedOrd) ? DateTime.MinValue : reader.GetDateTime(startedOrd);
+        var created = reader.IsDBNull(createdOrd) ? started : reader.GetDateTime(createdOrd);
+        if (created == default)
+            created = started;
+
+        return new TicketSearchRow(
+            TransactionId: reader.IsDBNull(reader.GetOrdinal("TransactionId")) ? 0 : reader.GetInt32(reader.GetOrdinal("TransactionId")),
             WorkflowInstanceId: reader.GetGuid(reader.GetOrdinal("WorkflowInstanceId")),
             ReferenceNumber: reader.IsDBNull(reader.GetOrdinal("ReferenceNumber")) ? null : reader.GetString(reader.GetOrdinal("ReferenceNumber")),
-            InstanceStartedAtUtc: reader.GetDateTime(reader.GetOrdinal("InstanceStartedAtUtc")),
+            InstanceStartedAtUtc: started == DateTime.MinValue ? DateTime.UtcNow : started,
             CompletedAtUtc: reader.IsDBNull(reader.GetOrdinal("CompletedAtUtc")) ? null : reader.GetDateTime(reader.GetOrdinal("CompletedAtUtc")),
             RaisedByUserId: reader.IsDBNull(reader.GetOrdinal("RaisedByUserId")) ? null : reader.GetGuid(reader.GetOrdinal("RaisedByUserId")),
             ActivityId: reader.IsDBNull(reader.GetOrdinal("ActivityId")) ? null : reader.GetString(reader.GetOrdinal("ActivityId")),
@@ -1015,12 +1063,13 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
             StageType: reader.IsDBNull(reader.GetOrdinal("StageType")) ? null : reader.GetString(reader.GetOrdinal("StageType")),
             StageName: reader.IsDBNull(reader.GetOrdinal("StageName")) ? null : reader.GetString(reader.GetOrdinal("StageName")),
             Review: reader.IsDBNull(reader.GetOrdinal("Review")) ? null : reader.GetString(reader.GetOrdinal("Review")),
-            TransactionCreatedAt: reader.GetDateTime(reader.GetOrdinal("TransactionCreatedAt")),
+            TransactionCreatedAt: created == default || created == DateTime.MinValue ? DateTime.UtcNow : created,
             TransactionCreatedBy: reader.IsDBNull(reader.GetOrdinal("TransactionCreatedBy")) ? null : reader.GetGuid(reader.GetOrdinal("TransactionCreatedBy")),
             TransactionModifiedAt: reader.IsDBNull(reader.GetOrdinal("TransactionModifiedAt")) ? null : reader.GetDateTime(reader.GetOrdinal("TransactionModifiedAt")),
             TransactionModifiedBy: reader.IsDBNull(reader.GetOrdinal("TransactionModifiedBy")) ? null : reader.GetGuid(reader.GetOrdinal("TransactionModifiedBy")),
             ActivityUserId: reader.IsDBNull(reader.GetOrdinal("ActivityUserId")) ? null : reader.GetGuid(reader.GetOrdinal("ActivityUserId")),
             ActivityGroupId: reader.IsDBNull(reader.GetOrdinal("ActivityGroupId")) ? null : reader.GetInt32(reader.GetOrdinal("ActivityGroupId")));
+    }
 
     private static bool BuildComparison(
         string columnExpr,
@@ -1034,14 +1083,14 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
         if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dt)
             && !decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out _))
         {
-            sql = $"TRY_CONVERT(datetime2, {columnExpr}) {op} {paramName}";
-            parameters.Add(new SqlParameter(paramName, dt));
+            sql = $"{DateColumnSql(columnExpr)} {op} CAST({paramName} AS date)";
+            parameters.Add(new SqlParameter(paramName, dt.Date));
             return true;
         }
 
-        if (decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d))
+        if (TryParseMoney(value, out var d))
         {
-            sql = $"TRY_CONVERT(float, {columnExpr}) {op} {paramName}";
+            sql = $"{NumericColumnSql(columnExpr)} {op} {paramName}";
             parameters.Add(new SqlParameter(paramName, d));
             return true;
         }
@@ -1273,6 +1322,208 @@ public sealed class WorkflowTicketSearchService : IWorkflowTicketSearchService
     }
 
     private static string EscapeColumn(string column) => column.Replace("]", "]]", StringComparison.Ordinal);
+
+    private static string DateColumnSql(string columnExpr) => $"""
+        CAST(COALESCE(
+            TRY_CONVERT(datetime2, CONVERT(nvarchar(64), {columnExpr})),
+            TRY_CONVERT(datetime2, CONVERT(nvarchar(64), {columnExpr}), 126),
+            TRY_CONVERT(datetime2, CONVERT(nvarchar(64), {columnExpr}), 23),
+            TRY_CONVERT(datetime2, CONVERT(nvarchar(64), {columnExpr}), 107),
+            TRY_CONVERT(datetime2, CONVERT(nvarchar(64), {columnExpr}), 106),
+            TRY_CONVERT(datetime2, CONVERT(nvarchar(64), {columnExpr}), 101),
+            TRY_CONVERT(datetime2, CONVERT(nvarchar(64), {columnExpr}), 103)
+        ) AS date)
+        """;
+
+    private static string NumericColumnSql(string columnExpr) => $"""
+        TRY_CONVERT(float, REPLACE(REPLACE(REPLACE(REPLACE(CONVERT(nvarchar(64), {columnExpr}), N'$', N''), N',', N''), N' ', N''), N'%', N''))
+        """;
+
+    private static bool TryBuildDatePreset(
+        string columnExpr,
+        string? scalar,
+        string typeHint,
+        string condition,
+        out string sql,
+        out List<SqlParameter> parameters)
+    {
+        sql = string.Empty;
+        parameters = [];
+        var preset = NormalizeDatePreset(scalar);
+        if (preset is null)
+            return false;
+
+        var isDateType = typeHint is "date" or "datetime" or "time";
+        var equality = condition is "eq" or "=" or "equal" or "contains" or "like";
+        if (!equality)
+            return false;
+        if (!isDateType && typeHint is not "" && typeHint is not "short_text" and not "shorttext" and not "text")
+            return false;
+
+        var dateExpr = DateColumnSql(columnExpr);
+        const string today = "CAST(SYSUTCDATETIME() AS date)";
+        sql = preset switch
+        {
+            "overdue" or "pastdue" => $"{dateExpr} IS NOT NULL AND {dateExpr} < {today}",
+            "duetoday" or "today" => $"{dateExpr} IS NOT NULL AND {dateExpr} = {today}",
+            "next7days" => $"{dateExpr} IS NOT NULL AND {dateExpr} >= {today} AND {dateExpr} < DATEADD(day, 7, {today})",
+            "next15days" => $"{dateExpr} IS NOT NULL AND {dateExpr} >= {today} AND {dateExpr} < DATEADD(day, 15, {today})",
+            "next30days" => $"{dateExpr} IS NOT NULL AND {dateExpr} >= {today} AND {dateExpr} < DATEADD(day, 30, {today})",
+            "thisweek" => $"{dateExpr} IS NOT NULL AND {dateExpr} >= {today} AND {dateExpr} < DATEADD(day, 7, {today})",
+            "thismonth" => $"{dateExpr} IS NOT NULL AND {dateExpr} >= {today} AND {dateExpr} < DATEADD(month, 1, {today})",
+            "upcoming" => $"{dateExpr} IS NOT NULL AND {dateExpr} >= {today}",
+            _ => string.Empty
+        };
+        return sql.Length > 0;
+    }
+
+    private static string? NormalizeDatePreset(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var token = Regex.Replace(value.Trim().ToLowerInvariant(), @"[\s_]+", "");
+        return token switch
+        {
+            "overdue" or "overdueitems" or "pastdue" or "pastdueitems" => "overdue",
+            "duetoday" or "today" or "due_today" => "duetoday",
+            "next7days" or "next7day" or "nextsevendays" => "next7days",
+            "next15days" or "next15day" => "next15days",
+            "next30days" or "next30day" or "nextmonth" => "next30days",
+            "thisweek" => "thisweek",
+            "thismonth" => "thismonth",
+            "upcoming" or "future" => "upcoming",
+            _ => null
+        };
+    }
+
+    private static bool TryBuildNumericRange(
+        string columnExpr,
+        string? scalar,
+        string? valueTo,
+        string typeHint,
+        string condition,
+        string paramBase,
+        out string sql,
+        out List<SqlParameter> parameters)
+    {
+        sql = string.Empty;
+        parameters = [];
+
+        if (typeHint is "date" or "datetime" or "time")
+            return false;
+
+        if (condition is "between"
+            && TryParseMoney(scalar, out var betweenFrom)
+            && TryParseMoney(valueTo, out var betweenTo))
+        {
+            var fromName = $"{paramBase}_from";
+            var toName = $"{paramBase}_to";
+            sql = $"{NumericColumnSql(columnExpr)} >= {fromName} AND {NumericColumnSql(columnExpr)} <= {toName}";
+            parameters.Add(new SqlParameter(fromName, betweenFrom));
+            parameters.Add(new SqlParameter(toName, betweenTo));
+            return true;
+        }
+
+        if (condition is not ("eq" or "=" or "equal" or "contains" or "like" or "in" or "between"))
+            return false;
+
+        if (!TryParseAmountFilter(scalar, out var min, out var max, out var cmp))
+            return false;
+
+        // Don't treat a plain number as a range when the caller asked for contains on text
+        // unless it looks like "0-8000" / "$1k-$5k" / "< $1k".
+        if (cmp is "eq" && condition is "contains" or "like")
+            return false;
+
+        var expr = NumericColumnSql(columnExpr);
+        if (cmp is "between")
+        {
+            var fromName = $"{paramBase}_from";
+            var toName = $"{paramBase}_to";
+            sql = $"{expr} IS NOT NULL AND {expr} >= {fromName} AND {expr} <= {toName}";
+            parameters.Add(new SqlParameter(fromName, min));
+            parameters.Add(new SqlParameter(toName, max));
+            return true;
+        }
+
+        sql = $"{expr} IS NOT NULL AND {expr} {cmp} {paramBase}";
+        parameters.Add(new SqlParameter(paramBase, cmp is "<" or "<=" ? max : min));
+        return true;
+    }
+
+    private static bool TryParseAmountFilter(string? raw, out decimal min, out decimal max, out string cmp)
+    {
+        min = 0;
+        max = 0;
+        cmp = "eq";
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        var text = raw.Trim();
+        var comparison = Regex.Match(text, @"^(?<op><=|>=|<|>|≤|≥)\s*(?<amt>.+)$");
+        if (comparison.Success && TryParseMoney(comparison.Groups["amt"].Value, out var bound))
+        {
+            var op = comparison.Groups["op"].Value switch
+            {
+                "≤" => "<=",
+                "≥" => ">=",
+                var v => v
+            };
+            cmp = op;
+            min = bound;
+            max = bound;
+            return true;
+        }
+
+        var range = Regex.Match(
+            text,
+            @"^(?<from>\$?\s*\d[\d,]*\.?\d*\s*[kKmM]?)\s*(?:-|–|to)\s*(?<to>\$?\s*\d[\d,]*\.?\d*\s*[kKmM]?)$",
+            RegexOptions.IgnoreCase);
+        if (range.Success
+            && TryParseMoney(range.Groups["from"].Value, out var from)
+            && TryParseMoney(range.Groups["to"].Value, out var to))
+        {
+            min = Math.Min(from, to);
+            max = Math.Max(from, to);
+            cmp = "between";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryParseMoney(string? raw, out decimal value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        var s = raw.Trim()
+            .Replace("$", "", StringComparison.Ordinal)
+            .Replace(",", "", StringComparison.Ordinal)
+            .Replace(" ", "", StringComparison.Ordinal);
+        if (s.Length == 0)
+            return false;
+
+        var multiplier = 1m;
+        if (s.EndsWith("k", StringComparison.OrdinalIgnoreCase))
+        {
+            multiplier = 1_000m;
+            s = s[..^1];
+        }
+        else if (s.EndsWith("m", StringComparison.OrdinalIgnoreCase))
+        {
+            multiplier = 1_000_000m;
+            s = s[..^1];
+        }
+
+        if (!decimal.TryParse(s, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var n))
+            return false;
+
+        value = n * multiplier;
+        return true;
+    }
 
     private static string InferDataType(string? controlType)
     {
