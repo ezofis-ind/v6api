@@ -22,7 +22,9 @@ public sealed class CatalogDbContext : DbContext
     public DbSet<Branding> Brandings => Set<Branding>();
     public DbSet<FolderCreationDraft> FolderCreationDrafts => Set<FolderCreationDraft>();
     public DbSet<UserCreationDraft> UserCreationDrafts => Set<UserCreationDraft>();
+    public DbSet<ReportBuilderDraft> ReportBuilderDrafts => Set<ReportBuilderDraft>();
     public DbSet<PortalJsonSnapshot> PortalJsonSnapshots => Set<PortalJsonSnapshot>();
+    public DbSet<DashboardSchemaSnapshot> DashboardSchemaSnapshots => Set<DashboardSchemaSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -193,6 +195,19 @@ public sealed class CatalogDbContext : DbContext
             entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsDeleted, e.IsCompleted });
         });
 
+        modelBuilder.Entity<ReportBuilderDraft>(entity =>
+        {
+            entity.ToTable("ReportBuilderDrafts");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.CurrentStepKey).HasMaxLength(64).IsRequired();
+            entity.Property(e => e.DraftJson).IsRequired();
+            entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.ModifiedAtUtc);
+            entity.Property(e => e.IsCompleted);
+            entity.Property(e => e.IsDeleted);
+            entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsDeleted, e.IsCompleted });
+        });
+
         modelBuilder.Entity<PortalJsonSnapshot>(entity =>
         {
             entity.ToTable("PortalJsonSnapshots");
@@ -204,6 +219,20 @@ public sealed class CatalogDbContext : DbContext
             entity.Property(e => e.IsDeleted);
             entity.HasIndex(e => e.Token).IsUnique();
             entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsDeleted });
+        });
+
+        modelBuilder.Entity<DashboardSchemaSnapshot>(entity =>
+        {
+            entity.ToTable("DashboardSchemaSnapshots");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.SchemaJson).IsRequired();
+            entity.Property(e => e.DashboardHtml);
+            entity.Property(e => e.HtmlModifiedAtUtc);
+            entity.Property(e => e.CreatedAtUtc);
+            entity.Property(e => e.ModifiedAtUtc);
+            entity.Property(e => e.IsDeleted);
+            entity.HasIndex(e => new { e.TenantId, e.RepositoryId, e.IsDeleted });
+            entity.HasIndex(e => new { e.TenantId, e.WorkflowId, e.IsDeleted });
         });
     }
 }

@@ -595,7 +595,7 @@ VALUES({vals});";
         }
         cmd.Parameters.AddWithValue("@FormId", wFormIdValue);
         cmd.Parameters.AddWithValue("@JsonId", field.Id!);
-        cmd.Parameters.AddWithValue("@Name", (object?)field.Label ?? field.Id!);
+        cmd.Parameters.AddWithValue("@Name", FormFieldNameResolver.ResolveDisplayName(field));
         cmd.Parameters.AddWithValue("@Type", (object?)field.Type ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@Mandatory", isMandatory);
         cmd.Parameters.AddWithValue("@ParentId", parentId);

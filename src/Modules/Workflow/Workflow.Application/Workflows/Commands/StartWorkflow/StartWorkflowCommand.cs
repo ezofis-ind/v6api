@@ -30,4 +30,6 @@ public record StartWorkflowCommandResult(
     string? FormDataJson = null,
     string? FormDataBlobPath = null,
     IReadOnlyDictionary<string, object?>? StartPayload = null,
-    string? ApAgentJobId = null);
+    string? ApAgentJobId = null,
+    /// <summary>Sequential ticket number saved on the instance (e.g. REQ-1, REQ-2).</summary>
+    string? ReferenceNumber = null);

@@ -236,7 +236,7 @@ public sealed class WorkflowPdfGenerationService : IWorkflowPdfGenerationService
     }
 
     private static Dictionary<string, string?> BuildArchiveFolderMetadata(
-        IReadOnlyDictionary<string, string> pdfFormData,
+        IReadOnlyDictionary<string, object?> pdfFormData,
         string? activityId,
         string? stepName,
         string? referenceNumber)
@@ -249,26 +249,33 @@ public sealed class WorkflowPdfGenerationService : IWorkflowPdfGenerationService
             ["referenceNumber"] = referenceNumber
         };
 
-        // Copy all mapped form values (helps Name / SqlColumnName matching).
         foreach (var (key, value) in pdfFormData)
         {
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+            if (string.IsNullOrWhiteSpace(key) || value is IList<Dictionary<string, object?>>)
                 continue;
-            metadata[key.Trim()] = value.Trim();
+
+            var text = value?.ToString()?.Trim();
+            if (string.IsNullOrWhiteSpace(text))
+                continue;
+
+            metadata[key.Trim()] = text;
         }
 
-        // Vessel Call repository folder path: Year / Customer / Vessel / JobNo / Port
+        var scalarLookup = metadata
+            .Where(static pair => !string.IsNullOrWhiteSpace(pair.Value))
+            .ToDictionary(static pair => pair.Key, static pair => pair.Value!, StringComparer.OrdinalIgnoreCase);
+
         SetIfMissing(metadata, "Customer",
-            FirstNonEmpty(pdfFormData, "Customer / Principal", "Customer", "CustomerName"));
+            FirstNonEmpty(scalarLookup, "Customer / Principal", "Customer", "CustomerName"));
         SetIfMissing(metadata, "Vessel",
-            FirstNonEmpty(pdfFormData, "Vessel Name", "Vessel", "VesselName"));
+            FirstNonEmpty(scalarLookup, "Vessel Name", "Vessel", "VesselName"));
         SetIfMissing(metadata, "Port",
-            FirstNonEmpty(pdfFormData, "Port of Call", "Port", "PortOfCall"));
+            FirstNonEmpty(scalarLookup, "Port of Call", "Port", "PortOfCall"));
         SetIfMissing(metadata, "JobNo",
-            FirstNonEmpty(pdfFormData, "Job No", "JobNo", "Document No.", "Voyage Number", "PDA Number", "FDA Number"));
+            FirstNonEmpty(scalarLookup, "Job No", "JobNo", "Document No.", "Voyage Number", "PDA Number", "FDA Number"));
         SetIfMissing(metadata, "Job No", metadata.GetValueOrDefault("JobNo"));
 
-        var year = FirstNonEmpty(pdfFormData, "Year", "Document Date", "DocumentDate");
+        var year = FirstNonEmpty(scalarLookup, "Year", "Document Date", "DocumentDate");
         if (!string.IsNullOrWhiteSpace(year))
         {
             if (DateTime.TryParse(year, out var dt))

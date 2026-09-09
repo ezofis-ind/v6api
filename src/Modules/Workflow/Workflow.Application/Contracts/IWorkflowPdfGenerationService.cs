@@ -33,7 +33,7 @@ public sealed record WorkflowPdfGenerationResult(
 
 /// <summary>Input body fields posted to the Python PDF generate API.</summary>
 public sealed record WorkflowPdfPythonRequestDto(
-    IReadOnlyDictionary<string, string> FormData,
+    IReadOnlyDictionary<string, object?> FormData,
     string FileName,
     object Metadata,
     /// <summary>pdfme template JSON sent as templateJson.</summary>
